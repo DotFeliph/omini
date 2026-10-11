@@ -109,9 +109,8 @@ describe('PortPanel', () => {
     await w.get('[data-port=igb0]').trigger('click')
     const card = w.get('[data-test=port-card]')
     expect(card.text()).toContain('ISP modem')
-    // Open what is connected.
-    await card.get('[data-test=open-linked]').trigger('click')
-    expect(w.emitted('select')![0]).toEqual(['mac:aa'])
+    // What is connected opens from the panel's list, not from here.
+    expect(card.find('[data-test=open-linked]').exists()).toBe(false)
     // Name the port.
     await card.get('[data-test=edit-port]').trigger('click')
     await w.get('[data-test=port-label-input]').setValue(' Uplink ')

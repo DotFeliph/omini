@@ -8,9 +8,12 @@ request (no session); a wrong username or password answers 401
 object for singleton menus like /system/resource); `GET /rest/<menu>/<id>`
 reads one item by `.id` or name; query parameters filter (`?type=ether`) and
 `.proplist` picks fields. POST runs a command: only `print` and the
-read-only `/interface/ethernet/monitor` with `once` are accepted from Omini's
-read-only user (any other command, PUT, PATCH or DELETE answers 403 "not
-enough permissions"). A menu this RouterOS lacks (no `wifi`/`wireless`
+read-only `/interface/ethernet/monitor` with `once` are accepted. PATCH
+`/rest/interface/ethernet/<id>` (or `/rest/interface/<id>`, by `.id` or name)
+with `{"disabled": "true"|"false"}` disables or enables a physical port (the
+console's `set`): it sets the design port's admin_up, so the port reads
+`disabled=true`, `running=false` and its link drops in the world. Any other
+command, property, PUT or DELETE answers 403 "not enough permissions". A menu this RouterOS lacks (no `wifi`/`wireless`
 package on these boxes) answers 400 "no such command or directory".
 
 All topology data comes from the world snapshot: port state and counters,
@@ -165,9 +168,32 @@ class MikroTik(HttpService):
             if sub.endswith("/print"):
                 return self.get(sub[: -len("/print")], req, snap, body.get(".proplist"))
             return Response.json(FORBIDDEN, 403)
-        if req.method in ("PUT", "PATCH", "DELETE"):
+        if req.method == "PATCH":
+            body = self.body(req)
+            if body is None:
+                return Response.json({"error": 400, "message": "Bad Request", "detail": "JSON parse error"}, 400)
+            return self.patch(sub, body, snap)
+        if req.method in ("PUT", "DELETE"):
             return Response.json(FORBIDDEN, 403)
         return Response.json({"error": 405, "message": "Method Not Allowed"}, 405)
+
+    def patch(self, sub: str, body: dict[str, Any], snap: Snapshot) -> Response:
+        """`set` of one port: only `disabled` of a physical port is modelled."""
+        menu, _, item = sub.rpartition("/")
+        if menu not in ("/interface", "/interface/ethernet") or set(body) != {"disabled"}:
+            return Response.json(FORBIDDEN, 403)
+        value = str(body["disabled"]).lower()
+        if value not in ("true", "false", "yes", "no"):
+            return Response.json(
+                {"error": 400, "message": "Bad Request", "detail": "value of disabled must be yes or no"}, 400
+            )
+        port = next((p for p in self.physical() if item in (self.ids[p.name], p.name)), None)
+        if port is None:
+            return Response.json({"error": 404, "message": "Not Found", "detail": "no such item"}, 404)
+        # The design node (the world reads its admin_up for links and counters).
+        self.ctx.world.d.node(self.node).ports[port.name].admin_up = value in ("false", "no")
+        rows = self.ethernet(snap) if menu == "/interface/ethernet" else self.interfaces(snap)
+        return Response.json(next(r for r in rows if r["name"] == port.name))
 
     def authorized(self, req: Request) -> bool:
         auth = req.headers.get("authorization", "")
@@ -458,7 +484,7 @@ class MikroTik(HttpService):
                     "fp-tx-packet": "0",
                     "running": b(c["up"]),
                     "slave": b(p.name in bonded or p.name in self.bridge_ports),
-                    "disabled": "false",
+                    "disabled": b(not p.admin_up),
                 }
             )
             if p.descr:
@@ -513,7 +539,7 @@ class MikroTik(HttpService):
                 "switch": "switch1",
                 "running": b(snap.port(self.node, p.name).up),
                 "slave": b(p.lag is not None or p.name in self.bridge_ports),
-                "disabled": "false",
+                "disabled": b(not p.admin_up),
             }
             if p.kind == "sfp":
                 row.update({"sfp-rate-select": "high", "sfp-shutdown-temperature": "95C", "sfp-ignore-rx-los": "false"})

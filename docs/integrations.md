@@ -2,8 +2,13 @@
 
 An integration is a source of data: the built-in network scan, or a plugin
 that reads a firewall, a switch, a Wi-Fi system or a hypervisor through its
-own API. Every integration is **read-only**: none sends a request that
-changes a device's configuration.
+own API. Collecting only reads. The integrations that support it can also
+**change** their devices from the map (today: enable and disable ports on
+the network scan's SNMP devices, MikroTik, UniFi, Omada, OpenWrt and Horaco);
+see [Configuration changes](decisions.md#configuration-changes). Their guides
+below ask for an account allowed to make those changes; a read-only account
+still draws the map, and a change then fails with a message saying which
+permission is missing.
 
 - [Adding an integration](#adding-an-integration)
 - [Built-in integrations](#built-in-integrations)
@@ -19,7 +24,7 @@ changes a device's configuration.
    integrations (marked "Built in"), the plugins you installed and the catalog.
 2. Pick one. A plugin that is not installed yet is installed first (it takes
    a minute: Omini builds its Python environment).
-3. Fill in its form: usually the device's address and a read-only account.
+3. Fill in its form: usually the device's address and an account for Omini.
 4. **Test connection** checks the address and the credentials and says what is
    missing (many plugins list the permissions the account lacks).
 5. Save. A collection round starts at once.
@@ -206,11 +211,12 @@ last check), interfaces with link rate and SFP diagnostics, bridges, bonds,
 bridge VLANs and host table, ARP, DHCP leases, MNDP/LLDP/CDP neighbors, Wi-Fi
 clients and default-route gateways.
 
-**Read-only account** (in a RouterOS terminal):
+**Account** (in a RouterOS terminal). The `write` policy lets Omini enable
+and disable Ethernet ports; leave it out for the map alone:
 
 ```routeros
-/user group add name=omini-read policy=read,api,rest-api comment="Omini (read-only)"
-/user add name=omini group=omini-read password="a-long-random-password" address=<omini-ip>/32
+/user group add name=omini policy=read,write,api,rest-api comment="Omini"
+/user add name=omini group=omini password="a-long-random-password" address=<omini-ip>/32
 # HTTPS for the REST API, if www-ssl has no certificate yet:
 /certificate add name=omini-https common-name=router.lan days-valid=3650
 /certificate sign omini-https
@@ -218,8 +224,9 @@ clients and default-route gateways.
 ```
 
 In Omini: address `https://<router>`, user `omini` and its password.
-The one `POST` the plugin sends runs the Ethernet `monitor` command with
-`once`, which only reads the link state.
+Collecting sends one `POST`: the Ethernet `monitor` command with `once`,
+which only reads the link state. A change is a `PATCH` of the port's
+`disabled` property (kept across reboots by RouterOS).
 
 ## UniFi Network
 
@@ -228,13 +235,17 @@ to 9.x): every adopted gateway, switch and access point with ports, link
 speed, LLDP and uplinks; Wi-Fi and wired clients with band, signal and
 traffic; VLANs; WAN status; CPU, memory, temperatures and pending firmware.
 
-**Read-only account:** a **local** account (not a UI.com account, no
-two-factor authentication) with the **View Only** role.
+**Account:** a **local** account (not a UI.com account, no two-factor
+authentication) that can manage devices, to enable and disable switch ports
+(**View Only** is enough for the map alone):
 
 - UniFi OS: **Admins & Users → Create New**, **Restrict to local access
-  only**, user `omini`, role **View Only** for the Network application.
+  only**, user `omini`, role **Full Management** for the Network application.
 - Self-hosted: **Settings → Admins & Users → Add Admin**, a local admin with
-  the **View Only** role.
+  the **Site Admin** role ("Administrator" on older versions).
+
+A change sets the port's override to "disabled" (`forward`) on the
+controller, which provisions the switch; the other overrides stay as they are.
 
 In Omini: the console (`https://192.168.1.1`) or application
 (`https://controller:8443`) address, the account, and the **site** (the part
@@ -249,12 +260,14 @@ ports, link speed, SFP diagnostics, LLDP, uplinks, WANs with latency and loss,
 LAN networks, radios, clients, and pending firmware. The cloud-based
 controller is not supported.
 
-**Read-only application.**
+**Application.**
 
 1. As an administrator, in the **Global** view: **Settings → Platform
    Integration → Open API → Add New App**.
-2. App name `Omini`, mode **Client**, role **Viewer**, and only the sites
-   Omini should map.
+2. App name `Omini`, mode **Client**, role **Administrator** (or a custom
+   role with **Modify** permission on devices) to enable and disable switch
+   ports (**Viewer** is enough for the map alone), and only the sites Omini
+   should map.
 3. Copy the **Client ID**, the **Client Secret** and the **Interface Access
    Address**.
 4. In Omini: the controller address (e.g. `https://192.168.1.10:8043`), the
@@ -267,14 +280,14 @@ API LuCI uses): board and system info, ports with link speed and counters,
 bridge VLANs, WANs and gateways, host hints, DHCP leases, Wi-Fi clients with
 signal and rates, ARP and temperatures.
 
-**Read-only account:** an rpcd login with an ACL that allows only the methods
-and files Omini reads. Over SSH on the router, create
-`/usr/share/rpcd/acl.d/omini.json`:
+**Account:** an rpcd login with an ACL that allows only the methods and files
+Omini reads, plus changes to `/etc/config/network` to enable and disable
+ports. Over SSH on the router, create `/usr/share/rpcd/acl.d/omini.json`:
 
 ```json
 {
   "omini": {
-    "description": "Omini: read-only access for the network map",
+    "description": "Omini: reads for the network map, enables and disables ports",
     "read": {
       "ubus": {
         "system": ["board", "info"],
@@ -282,14 +295,22 @@ and files Omini reads. Over SSH on the router, create
         "network.interface": ["dump"],
         "luci-rpc": ["getHostHints", "getDHCPLeases"],
         "iwinfo": ["devices", "info", "assoclist"],
-        "file": ["read", "list"]
+        "file": ["read", "list"],
+        "uci": ["get"]
       },
+      "uci": ["network"],
       "file": {
         "/proc/net/arp": ["read"],
         "/sys/class/thermal": ["list"],
         "/sys/class/thermal/thermal_zone*/type": ["read"],
         "/sys/class/thermal/thermal_zone*/temp": ["read"]
       }
+    },
+    "write": {
+      "ubus": {
+        "uci": ["set", "add", "delete", "revert", "apply", "confirm", "rollback"]
+      },
+      "uci": ["network"]
     }
   }
 }
@@ -302,12 +323,18 @@ uci add rpcd login
 uci set rpcd.@login[-1].username='omini'
 uci set rpcd.@login[-1].password="$(uhttpd -m 'a-long-random-password')"
 uci add_list rpcd.@login[-1].read='omini'
+uci add_list rpcd.@login[-1].write='omini'
 uci commit rpcd
 /etc/init.d/rpcd restart
 ```
 
 In Omini: the LuCI address (`https://192.168.1.1`), user `omini` and its
-password.
+password. For the map alone, leave out the `"write"` block and the
+`write` line. A change sets the port's `enabled` option in
+`/etc/config/network` and applies it with rollback: unless Omini sees the port
+change and confirms it within 30 seconds, the router restores the old
+configuration by itself. Routers with an old switch chip (swconfig) are not
+supported for changes.
 
 ## Proxmox VE
 
@@ -342,7 +369,9 @@ Reads the Horaco HC-SWTGW218AS and switches with the same web interface
 and speed, RJ45 or SFP per port, port counters and the MAC table.
 
 These switches have a single admin account: use it (`admin` by default). The
-plugin signs in with the same form as the login page and only reads pages.
+plugin signs in with the same form as the login page and reads pages; it
+enables and disables ports through the **Port Setting** form, keeping each
+port's other settings, then **Save Configuration**.
 The switch keeps one session, so signing in from Omini may sign you out of
 its web interface in your browser. Its web server is slow: the plugin reads
 one page at a time, and a collection takes a few seconds.

@@ -1,0 +1,443 @@
+package collector
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"slices"
+	"sync"
+	"time"
+
+	"github.com/riccardoalv/omini/internal/integration"
+	"github.com/riccardoalv/omini/internal/model"
+	"github.com/riccardoalv/omini/internal/store"
+	"github.com/riccardoalv/omini/internal/topology"
+)
+
+// AllowDestructiveSetting is the settings key of "Allow destructive changes":
+// "1" lets a change that cuts Omini or other gear off go through, after a
+// second confirmation.
+const AllowDestructiveSetting = "allow_destructive_changes"
+
+// ChangeRequest is a configuration change asked for in the UI.
+type ChangeRequest struct {
+	NodeID string
+	Kind   model.ChangeKind
+	Port   string
+	Value  any
+	// Confirmed: the user confirmed a destructive change a second time.
+	Confirmed bool
+}
+
+var (
+	// ErrNotChangeable: the node is not a device whose integration applies this change.
+	ErrNotChangeable = errors.New("this device cannot apply that change")
+	// ErrInvalidChange: a port that does not exist, a value of the wrong type.
+	ErrInvalidChange = errors.New("invalid change")
+)
+
+// DestructiveError is returned for a destructive change that is not allowed
+// (Allowed false) or not confirmed a second time yet (Allowed true).
+type DestructiveError struct {
+	topology.Protection
+	Allowed bool
+}
+
+func (e *DestructiveError) Error() string {
+	if e.Allowed {
+		return "destructive change: confirm it again"
+	}
+	return "destructive changes are not allowed (Settings)"
+}
+
+// AllowDestructive reports whether destructive changes are allowed.
+func (c *Collector) AllowDestructive(ctx context.Context) bool {
+	v, ok, err := c.store.GetSetting(ctx, AllowDestructiveSetting)
+	return err == nil && ok && v == "1"
+}
+
+// SetAllowDestructive turns "Allow destructive changes" on or off.
+func (c *Collector) SetAllowDestructive(ctx context.Context, on bool) error {
+	v := "0"
+	if on {
+		v = "1"
+	}
+	return c.store.SetSetting(ctx, AllowDestructiveSetting, v)
+}
+
+// Apply applies a configuration change through the node's integration, which
+// applies, verifies and saves it, and puts the device as read after the change
+// on the map at once. Every attempt is kept in the history; the returned
+// record carries the error of one the device refused.
+func (c *Collector) Apply(ctx context.Context, req ChangeRequest) (store.ConfigChange, error) {
+	n, ok := c.node(req.NodeID)
+	if !ok || n.Device == nil || n.IntegrationID == 0 || !slices.Contains(n.Changes, req.Kind) {
+		return store.ConfigChange{}, ErrNotChangeable
+	}
+	// Waits for this integration only (a collection of it in progress), not
+	// for the whole round.
+	busy := c.lockIntegration(n.IntegrationID)
+	defer busy.Unlock()
+	before, value, err := checkChange(n, req)
+	if err != nil {
+		return store.ConfigChange{}, err
+	}
+	req.Value = value
+	// Disabling a protected port, or changing its VLANs, is destructive.
+	if p, guarded := n.Protected[req.Port]; guarded && (req.Kind == model.ChangeKindPortVlans || req.Value == false) {
+		if allowed := c.AllowDestructive(ctx); !allowed || !req.Confirmed {
+			return store.ConfigChange{}, &DestructiveError{Protection: p, Allowed: allowed}
+		}
+	}
+
+	in, err := c.store.GetIntegration(ctx, n.IntegrationID)
+	if err != nil {
+		return store.ConfigChange{}, err
+	}
+	change := model.Change{Device: n.Device.Key, Kind: req.Kind, Value: req.Value}
+	if req.Port != "" {
+		change.Port = &req.Port
+	}
+	devices, applyErr := c.applyWith(ctx, in, change)
+
+	after, _ := json.Marshal(req.Value)
+	rec := store.ConfigChange{
+		NodeID: n.ID, IntegrationID: n.IntegrationID, Kind: string(req.Kind), Port: req.Port,
+		Before: before, After: after, At: c.opts.Now(),
+	}
+	if applyErr != nil {
+		rec.Error = applyErr.Error()
+		slog.Warn("configuration change failed", "node", n.ID, "kind", req.Kind, "port", req.Port, "err", applyErr)
+	} else {
+		slog.Info("configuration changed", "node", n.ID, "kind", req.Kind, "port", req.Port, "value", req.Value)
+	}
+	if rec.ID, err = c.store.AddConfigChange(ctx, rec); err != nil {
+		return rec, err
+	}
+	if applyErr != nil {
+		return rec, applyErr
+	}
+	c.replaceDevices(ctx, n.IntegrationID, devices)
+	return rec, c.rebuild(ctx)
+}
+
+func (c *Collector) node(id string) (topology.Node, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, n := range c.state.Topology.Nodes {
+		if n.ID == id {
+			return n, true
+		}
+	}
+	return topology.Node{}, false
+}
+
+// checkChange validates a change against the device, and returns the value it
+// replaces as JSON and the value to send (normalized).
+func checkChange(n topology.Node, req ChangeRequest) (json.RawMessage, any, error) {
+	i := slices.IndexFunc(n.Device.Interfaces, func(i model.Interface) bool { return i.Name == req.Port })
+	if i < 0 {
+		return nil, nil, fmt.Errorf("%w: %s has no port %q", ErrInvalidChange, n.Label, req.Port)
+	}
+	port := n.Device.Interfaces[i]
+	switch req.Kind {
+	case model.ChangeKindPortEnabled:
+		if _, ok := req.Value.(bool); !ok {
+			return nil, nil, fmt.Errorf("%w: %s takes true or false", ErrInvalidChange, req.Kind)
+		}
+		if port.Enabled == nil {
+			return nil, nil, fmt.Errorf("%w: %s does not report whether %s is enabled", ErrInvalidChange, n.Label, req.Port)
+		}
+		before, err := json.Marshal(*port.Enabled)
+		return before, req.Value, err
+	case model.ChangeKindPortVlans:
+		if port.Vlans == nil {
+			return nil, nil, fmt.Errorf("%w: %s does not report the VLANs of %s", ErrInvalidChange, n.Label, req.Port)
+		}
+		v, err := portVlans(n.Device, req.Value)
+		if err != nil {
+			return nil, nil, err
+		}
+		before, err := json.Marshal(port.Vlans)
+		return before, v, err
+	}
+	return nil, nil, fmt.Errorf("%w: unknown change %q", ErrInvalidChange, req.Kind)
+}
+
+// portVlans reads a port.vlans value: only VLANs the device has, the
+// untagged (native) one not also tagged, at least one VLAN; tagged sorted.
+func portVlans(d *model.Device, value any) (model.PortVlans, error) {
+	var v model.PortVlans
+	raw, err := json.Marshal(value)
+	if err == nil {
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.DisallowUnknownFields()
+		err = dec.Decode(&v)
+	}
+	if err != nil {
+		return v, fmt.Errorf("%w: port.vlans takes {untagged, tagged}", ErrInvalidChange)
+	}
+	has := func(id uint16) bool {
+		return slices.ContainsFunc(d.Vlans, func(x model.Vlan) bool { return x.ID == id })
+	}
+	if v.Untagged == nil && len(v.Tagged) == 0 {
+		return v, fmt.Errorf("%w: a port needs at least one VLAN", ErrInvalidChange)
+	}
+	if v.Untagged != nil && !has(*v.Untagged) {
+		return v, fmt.Errorf("%w: the device has no VLAN %d", ErrInvalidChange, *v.Untagged)
+	}
+	slices.Sort(v.Tagged)
+	v.Tagged = slices.Compact(v.Tagged)
+	for _, id := range v.Tagged {
+		if !has(id) {
+			return v, fmt.Errorf("%w: the device has no VLAN %d", ErrInvalidChange, id)
+		}
+		if v.Untagged != nil && id == *v.Untagged {
+			return v, fmt.Errorf("%w: VLAN %d cannot be both untagged and tagged", ErrInvalidChange, id)
+		}
+	}
+	return v, nil
+}
+
+func (c *Collector) applyWith(ctx context.Context, in store.Integration, change model.Change) (devices []model.Device, err error) {
+	impl, err := c.reg.Get(in.Type)
+	if err != nil {
+		return nil, err
+	}
+	applier, ok := impl.(integration.Applier)
+	if !ok {
+		return nil, ErrNotChangeable
+	}
+	cfg, err := integration.OpenSecrets(c.box, impl.Info().Fields, in.Config)
+	if err != nil {
+		return nil, err
+	}
+	limit := c.opts.Timeout
+	if t, ok := impl.(interface{ Timeout() time.Duration }); ok && t.Timeout() > limit {
+		limit = t.Timeout()
+	}
+	ctx, cancel := context.WithTimeout(integration.WithInstance(ctx, in.ID), limit)
+	defer cancel()
+	defer func() {
+		if r := recover(); r != nil {
+			devices, err = nil, fmt.Errorf("integration panicked: %v", r)
+		}
+	}()
+	return applier.Apply(ctx, cfg, change)
+}
+
+// replaceDevices puts the devices read after a change in the integration's
+// snapshot, in place of those with the same key (a controller's other devices
+// keep their data until the next round).
+func (c *Collector) replaceDevices(ctx context.Context, id int64, devices []model.Device) {
+	c.mu.Lock()
+	snap := c.snaps[id]
+	merged := slices.Clone(snap.Devices)
+	for _, d := range devices {
+		if i := slices.IndexFunc(merged, func(o model.Device) bool { return o.Key == d.Key }); i >= 0 {
+			merged[i] = d
+		} else {
+			merged = append(merged, d)
+		}
+	}
+	snap.IntegrationID, snap.Devices, snap.OK, snap.Error = id, merged, true, ""
+	c.snaps[id] = snap
+	c.applied[id] = c.opts.Now()
+	c.mu.Unlock()
+	if err := c.store.SaveSnapshot(ctx, snap); err != nil {
+		slog.Error("save snapshot", "integration", id, "err", err)
+	}
+}
+
+// markChangeable sets, on each device whose integration applies changes, the
+// changes it can apply there and its protected ports. A port change needs the
+// device to report its ports' state: a plugin that cannot change a kind of
+// device (an access point) leaves it empty, and no button shows.
+func (c *Collector) markChangeable(ctx context.Context, topo *topology.Topology) {
+	list, err := c.store.ListIntegrations(ctx)
+	if err != nil {
+		return
+	}
+	changes := map[int64][]model.ChangeKind{}
+	for _, in := range list {
+		if impl, err := c.reg.Get(in.Type); err == nil {
+			if _, ok := impl.(integration.Applier); ok {
+				changes[in.ID] = impl.Info().Changes
+			}
+		}
+	}
+	protected := ProtectedPorts(*topo, c.opts.Self)
+	for i := range topo.Nodes {
+		n := &topo.Nodes[i]
+		if n.Kind != topology.KindDevice || !n.Online || n.Device == nil {
+			continue
+		}
+		for _, k := range changes[n.IntegrationID] {
+			if !offers(n.Device, k) {
+				continue
+			}
+			n.Changes = append(n.Changes, k)
+		}
+		if len(n.Changes) > 0 {
+			n.Protected = protected[n.ID]
+		}
+	}
+}
+
+// ProtectedPorts returns, per device, the ports whose disabling is
+// destructive: those that would cut Omini off ("omini": where the device
+// learned one of Omini's MACs, or that lead to Omini's node) and those that
+// would cut the network off the internet ("internet": the device's uplink,
+// where it learned a router's or firewall's MAC, or that lead to one). Taking
+// a device off the network (an access point, a server, another switch) is an
+// ordinary change. Omini's node is found by its MACs or addresses (self); when
+// it is not on the map, only the internet ports are known.
+func ProtectedPorts(topo topology.Topology, self Self) map[string]map[string]topology.Protection {
+	byID := map[string]*topology.Node{}
+	below := map[string][]topology.Edge{} // a node's downstream edges
+	for i := range topo.Nodes {
+		byID[topo.Nodes[i].ID] = &topo.Nodes[i]
+	}
+	for _, e := range topo.Edges {
+		if e.Kind != topology.EdgeVPN {
+			below[e.Source] = append(below[e.Source], e)
+		}
+	}
+	omini := ""
+	routers := map[string]bool{}
+	var routerMACs []model.MACAddress
+	for _, n := range topo.Nodes {
+		if omini == "" && n.Kind != topology.KindApp && self.Owns(n) {
+			omini = n.ID
+		}
+		if n.Kind == topology.KindDevice && isRouter(n.Role) {
+			routers[n.ID] = true
+			routerMACs = append(routerMACs, model.MACAddress(n.MAC))
+			if n.Device != nil {
+				routerMACs = append(routerMACs, n.Device.MACs...)
+			}
+		}
+	}
+	// reaches reports whether the subtree under a node holds one of want.
+	var reaches func(id string, want func(string) bool, seen map[string]bool) bool
+	reaches = func(id string, want func(string) bool, seen map[string]bool) bool {
+		if seen[id] {
+			return false
+		}
+		seen[id] = true
+		if want(id) {
+			return true
+		}
+		for _, e := range below[id] {
+			if reaches(e.Target, want, seen) {
+				return true
+			}
+		}
+		return false
+	}
+	isOmini := func(id string) bool { return id == omini }
+	isRouterNode := func(id string) bool { return routers[id] }
+
+	out := map[string]map[string]topology.Protection{}
+	set := func(node, port, reason, via string) {
+		if port == "" {
+			return
+		}
+		if out[node] == nil {
+			out[node] = map[string]topology.Protection{}
+		}
+		if _, done := out[node][port]; !done { // the first reason wins: omini, then internet
+			out[node][port] = topology.Protection{Reason: reason, Node: via}
+		}
+	}
+	for _, n := range topo.Nodes {
+		if n.Kind != topology.KindDevice || n.Device == nil {
+			continue
+		}
+		for _, f := range n.Device.Fdb {
+			if slices.Contains(self.MACs, f.MAC) {
+				set(n.ID, f.Port, "omini", "")
+			}
+		}
+		for _, e := range below[n.ID] {
+			if omini != "" && reaches(e.Target, isOmini, map[string]bool{}) {
+				set(n.ID, e.SourcePort, "omini", "")
+			}
+		}
+		for _, e := range topo.Edges {
+			if e.Target == n.ID && e.Kind != topology.EdgeVPN {
+				if omini != "" && !reaches(n.ID, isOmini, map[string]bool{}) {
+					set(n.ID, e.TargetPort, "omini", "") // Omini is upstream
+				}
+				set(n.ID, e.TargetPort, "internet", e.Source)
+			}
+		}
+		for _, f := range n.Device.Fdb {
+			if slices.Contains(routerMACs, f.MAC) && !routers[n.ID] {
+				set(n.ID, f.Port, "internet", "")
+			}
+		}
+		for _, e := range below[n.ID] {
+			if reaches(e.Target, isRouterNode, map[string]bool{}) {
+				set(n.ID, e.SourcePort, "internet", e.Target)
+			}
+		}
+	}
+	return out
+}
+
+func isRouter(role string) bool {
+	return role == string(model.DeviceRoleRouter) || role == string(model.DeviceRoleFirewall)
+}
+
+// Self is the machine Omini runs on: its MACs and addresses.
+type Self struct {
+	MACs []model.MACAddress
+	IPs  []string
+}
+
+// Owns reports whether a node is the machine Omini runs on.
+func (s Self) Owns(n topology.Node) bool {
+	if n.MAC != "" && slices.Contains(s.MACs, model.MACAddress(n.MAC)) {
+		return true
+	}
+	return n.IP != "" && slices.Contains(s.IPs, n.IP)
+}
+
+// lockIntegration locks the integration's runs (see Collector.busy).
+func (c *Collector) lockIntegration(id int64) *sync.Mutex {
+	c.busyMu.Lock()
+	m := c.busy[id]
+	if m == nil {
+		m = &sync.Mutex{}
+		c.busy[id] = m
+	}
+	c.busyMu.Unlock()
+	m.Lock()
+	return m
+}
+
+// changedSince reports whether a change replaced the integration's devices
+// after this collection of it started: its result is older than the map.
+func (c *Collector) changedSince(s store.Snapshot) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	t, ok := c.applied[s.IntegrationID]
+	return ok && s.CollectedAt.Before(t)
+}
+
+// offers reports whether a device can be offered a change: its ports report
+// what the change sets (their state, their VLANs), and for VLANs it has more
+// than one to choose from.
+func offers(d *model.Device, k model.ChangeKind) bool {
+	switch k {
+	case model.ChangeKindPortEnabled:
+		return slices.ContainsFunc(d.Interfaces, func(i model.Interface) bool { return i.Enabled != nil })
+	case model.ChangeKindPortVlans:
+		return len(d.Vlans) > 1 && slices.ContainsFunc(d.Interfaces, func(i model.Interface) bool { return i.Vlans != nil })
+	}
+	return false
+}

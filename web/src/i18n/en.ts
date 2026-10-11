@@ -5,6 +5,7 @@ export default {
     devices: 'Devices',
     alerts: 'Alerts',
     flows: 'Flows',
+    services: 'DNS & DHCP',
     integrations: 'Integrations',
     settings: 'Settings',
     expand: 'Expand menu',
@@ -222,6 +223,7 @@ export default {
     gateways: 'Gateways',
     loss: 'loss',
     gatewayStatus: { up: 'Online', degraded: 'Degraded', down: 'Offline', unknown: 'Unknown' },
+    gatewaysDown: '{n} with problems',
     integration: 'Integration',
     classification: 'Identification',
     detectedBy: 'Detected from',
@@ -287,6 +289,47 @@ export default {
     server: 'Server',
     unknown: 'Unknown',
     client: 'Client',
+  },
+  services: {
+    title: 'DNS & DHCP',
+    subtitle: 'Who hands out addresses and resolves names on your network, checked every round.',
+    checked: 'Checked {when}',
+    tabs: { dhcp: 'DHCP', dns: 'DNS' },
+    dhcp: {
+      answered: 'No DHCP server answered | 1 server answered | {n} servers answered',
+      noAnswer: 'No DHCP server answered: devices that join get no address.',
+      rogue: 'An unknown server answered too: {ips}.',
+      notChecked: 'Not checked: {error}',
+      servers: 'Servers',
+      server: 'Server',
+      gives: 'Hands out',
+      answer: 'Answer',
+      gateway: 'gateway',
+      lease: 'lease {time}',
+      unknown: 'Unknown',
+      pools: 'Pools',
+      leases: 'Leases ({n})',
+      search: 'Search by name, IP or MAC',
+      device: 'Device',
+      expires: 'Expires',
+      none: 'No DHCP information yet.',
+      noneHint:
+        'Turn on "DHCP check" in Integrations → Network scan, or add your router\'s integration.',
+    },
+    dns: {
+      server: 'Server',
+      status: 'Status',
+      external: 'Internet name',
+      local: 'Local name',
+      ok: 'OK',
+      down: 'Not answering',
+      slow: 'Slow',
+      localFails: 'Local names fail',
+      failed: 'failed: {error}',
+      errors: { timeout: 'no answer', refused: 'refused', notfound: 'not found' },
+      none: 'No DNS server checked yet.',
+      noneHint: 'Turn on "DNS check" in Integrations → Network scan.',
+    },
   },
   flows: {
     title: 'Flows',
@@ -432,6 +475,21 @@ export default {
         title: 'Network discovery is limited here',
         detail: 'Not available where Omini runs: {what}.',
       },
+      dhcp_no_offer: {
+        title: 'No DHCP server answers on {iface}',
+        detail: 'Devices that join the network get no address.',
+      },
+      dhcp_rogue: {
+        title: 'Unknown DHCP server at {ip}',
+        detail:
+          'It answers address requests on {iface} besides your router: devices may get a wrong address.',
+      },
+      dns_down: {
+        title: 'DNS {server} does not answer',
+        detail: 'It could not resolve {name}: {error}.',
+      },
+      dns_slow: { title: 'DNS {server} is slow', detail: 'It took {ms} ms to resolve a name.' },
+      dns_local: { title: 'DNS {server} does not resolve local names', detail: '{name}: {error}.' },
     },
     tips: {
       device_offline:
@@ -473,6 +531,13 @@ export default {
         'A visitor, a new appliance... or someone who should not be on your network.',
       discovery_limited:
         'See Integrations → Network scan: what is missing and how to fix it (usually network_mode: host).',
+      dhcp_no_offer: "Check the router's DHCP server is on, and the cable from this network to it.",
+      dhcp_rogue:
+        'Find the device with that address and MAC (often a home router plugged in by a LAN port) and turn its DHCP off.',
+      dns_down:
+        'Check the DNS server is running and has internet access; the DHCP may hand out another one meanwhile.',
+      dns_slow: 'Check its upstream servers and its load.',
+      dns_local: 'Check the DNS server knows the local domain (DHCP host names, local records).',
     },
   },
   traffic: {
@@ -765,6 +830,7 @@ export default {
     sections: {
       general: { title: 'General', hint: 'Theme and language' },
       map: { title: 'Map', hint: 'How the map groups clients' },
+      changes: { title: 'Changes', hint: 'What Omini may change on your devices' },
       notifications: {
         title: 'Notifications',
         hint: 'Telegram, e-mail, Slack, Discord, ntfy, webhook',
@@ -799,5 +865,32 @@ export default {
     },
     about: 'About',
     version: 'Version {v}',
+    changes: {
+      destructive: 'Allow destructive changes',
+      destructiveHint:
+        "Changes that cut Omini off, or the network off the internet (a switch's uplink, the router's port). Each one asks twice.",
+    },
+  },
+  changes: {
+    disable: 'Disable port',
+    enable: 'Enable port',
+    applying: 'Applying…',
+    disabled: 'Disabled',
+    confirmDisable: 'Disable {port}?',
+    confirmDisableOf: 'Disable {port} ({who})?',
+    confirmEnable: 'Enable {port}?',
+    cancel: 'Cancel',
+    again: 'Disable anyway',
+    blocked: 'Protected: {why} Allow destructive changes in Settings to do it.',
+    askAgain: 'This is a destructive change: {why} Disable it anyway?',
+    reasons: {
+      omini: 'Omini reaches this device through this port.',
+      internet: 'This port is the way to the router and the internet.',
+    },
+    history: 'Changes',
+    historyEmpty: 'No changes made from Omini yet.',
+    portEnabled: '{port}: enabled',
+    portDisabled: '{port}: disabled',
+    failed: 'not applied: {error}',
   },
 }

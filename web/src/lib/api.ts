@@ -15,9 +15,12 @@ import type {
   InventoryEntry,
   MapArea,
   CatalogEntry,
+  ChangeKind,
+  ConfigChange,
   PluginIndexStatus,
   PluginInfo,
   Point,
+  ServicesView,
   TestResult,
   TopologyResponse,
   WebService,
@@ -166,6 +169,16 @@ export const api = {
       'POST',
       `/api/nodes/${encodeURIComponent(nodeId)}/scan`,
     ),
+  /** Applies a change; a destructive one fails with 409 (see DestructiveError). */
+  applyChange: (
+    nodeId: string,
+    change: { kind: ChangeKind; port?: string; value: unknown; confirm?: boolean },
+  ) => request<ConfigChange>('POST', `/api/nodes/${encodeURIComponent(nodeId)}/changes`, change),
+  configChanges: (nodeId: string) =>
+    request<ConfigChange[]>('GET', `/api/nodes/${encodeURIComponent(nodeId)}/changes`),
+  changeSettings: () => request<{ allow_destructive: boolean }>('GET', '/api/change-settings'),
+  setChangeSettings: (input: { allow_destructive: boolean }) =>
+    request<{ allow_destructive: boolean }>('PUT', '/api/change-settings', input),
   webServices: (nodeId: string) =>
     request<WebService[]>('GET', `/api/nodes/${encodeURIComponent(nodeId)}/web`),
 
@@ -193,6 +206,8 @@ export const api = {
     const qs = params.toString()
     return request<PresenceEvent[]>('GET', `/api/presence${qs ? `?${qs}` : ''}`)
   },
+  /** The "DNS and DHCP" screen: the scan's checks, pools and leases. */
+  services: () => request<ServicesView>('GET', '/api/dns-dhcp'),
   flows: (q: { minutes?: number; node?: string; limit?: number } = {}) => {
     const params = new URLSearchParams()
     if (q.minutes) params.set('minutes', String(q.minutes))

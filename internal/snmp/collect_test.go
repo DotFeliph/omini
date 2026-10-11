@@ -78,6 +78,10 @@ func expected(d model.Device, vendor string, role model.DeviceRole) model.Device
 		if iface.TxBytes == nil {
 			iface.TxBytes = model.Ptr(uint64(0))
 		}
+		// ifAdminStatus is always there: a port is enabled unless said otherwise.
+		if iface.Enabled == nil {
+			iface.Enabled = model.Ptr(true)
+		}
 		ifaces[i] = iface
 	}
 	d.Interfaces = ifaces

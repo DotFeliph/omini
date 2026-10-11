@@ -222,7 +222,11 @@ def test_listeners(world: World) -> None:
     # Emulated APIs answer their own port: Proxmox 8006 on pve01, OPNsense 443 on the firewalls.
     assert ("https", "10.10.10.11", 8006) not in keys and ("https", "10.10.10.2", 443) not in keys
     assert ("https", "10.10.10.12", 8006) in keys  # pve02 serves its own web UI
-    assert len({(ip, p) for k, ip, p, _ in entries if k != "mcast"}) == len([e for e in entries if e[0] != "mcast"])
+    assert ("udp", "10.10.20.10", 53) in keys  # dc01: AD DNS, next to its TCP 53
+    # One listener per protocol, address and port.
+    assert len({(k == "udp", ip, p) for k, ip, p, _ in entries if k != "mcast"}) == len(
+        [e for e in entries if e[0] != "mcast"]
+    )
 
 
 # ------------------------------------------------------------------ live

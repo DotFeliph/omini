@@ -191,6 +191,20 @@
           },
           "description": "Usage of each DHCP range."
         },
+        "dhcp_checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DhcpCheck"
+          },
+          "description": "DHCP checks on this network (network scan): what answered a DHCPDISCOVER."
+        },
+        "dns_checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DnsCheck"
+          },
+          "description": "DNS checks of the servers of this network (network scan)."
+        },
         "firewall_states": {
           "$ref": "#/$defs/FirewallStates"
         }
@@ -260,6 +274,10 @@
         "up": {
           "type": "boolean",
           "description": "Operational status."
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Administrative status: false when the port is disabled in the device's configuration."
         },
         "speed_mbps": {
           "type": "integer",
@@ -628,6 +646,47 @@
           "items": {
             "$ref": "#/$defs/FormField"
           }
+        },
+        "changes": {
+          "type": "array",
+          "description": "Configuration changes the plugin can apply (action apply).",
+          "items": {
+            "$ref": "#/$defs/ChangeKind"
+          }
+        }
+      }
+    },
+    "ChangeKind": {
+      "type": "string",
+      "description": "A configuration change Omini knows. port.enabled: enable (true) or disable (false) a port. port.vlans: the port's VLANs, a PortVlans (access: untagged only; trunk: untagged as the native VLAN, or none, and the tagged list), only VLANs the device has.",
+      "enum": [
+        "port.enabled",
+        "port.vlans"
+      ]
+    },
+    "Change": {
+      "type": "object",
+      "description": "One configuration change to apply to a device.",
+      "required": [
+        "device",
+        "kind",
+        "value"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "device": {
+          "type": "string",
+          "description": "Key of the device, as the plugin reported it."
+        },
+        "kind": {
+          "$ref": "#/$defs/ChangeKind"
+        },
+        "port": {
+          "type": "string",
+          "description": "Interface name, for the changes of a port."
+        },
+        "value": {
+          "description": "The new value: a boolean for port.enabled, a PortVlans object for port.vlans."
         }
       }
     },
@@ -656,6 +715,10 @@
         "state_dir": {
           "type": "string",
           "description": "Writable directory private to this integration, kept between runs (e.g. to cache sessions)."
+        },
+        "change": {
+          "$ref": "#/$defs/Change",
+          "description": "The change to apply (action apply only)."
         }
       }
     },
@@ -711,7 +774,8 @@
       "type": "string",
       "enum": [
         "collect",
-        "test"
+        "test",
+        "apply"
       ]
     },
     "Host": {
@@ -1132,6 +1196,124 @@
         "limit": {
           "type": "integer",
           "minimum": 0
+        }
+      }
+    },
+    "DhcpCheck": {
+      "type": "object",
+      "description": "A DHCPDISCOVER sent on one interface and the offers that came back (no address is taken).",
+      "required": [
+        "interface"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "interface": {
+          "type": "string"
+        },
+        "offers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DhcpOffer"
+          }
+        },
+        "error": {
+          "type": "string",
+          "description": "Why the check could not run (then nothing is known about the servers)."
+        }
+      }
+    },
+    "DhcpOffer": {
+      "type": "object",
+      "description": "An answer to the DHCPDISCOVER.",
+      "required": [
+        "server_ip"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "server_ip": {
+          "type": "string",
+          "description": "The server identifier (option 54), else the sender."
+        },
+        "server_mac": {
+          "$ref": "#/$defs/MacAddress"
+        },
+        "offered_ip": {
+          "type": "string"
+        },
+        "routers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "DNS servers it hands out (option 6)."
+        },
+        "domain": {
+          "type": "string"
+        },
+        "lease_s": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rtt_ms": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "DnsCheck": {
+      "type": "object",
+      "description": "A DNS server and the test queries it answered.",
+      "required": [
+        "server"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "server": {
+          "type": "string"
+        },
+        "external": {
+          "$ref": "#/$defs/DnsQuery"
+        },
+        "local": {
+          "$ref": "#/$defs/DnsQuery"
+        }
+      }
+    },
+    "DnsQuery": {
+      "type": "object",
+      "description": "One test query.",
+      "required": [
+        "name",
+        "ok"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "ok": {
+          "type": "boolean",
+          "description": "The name resolved."
+        },
+        "rtt_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "answers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "error": {
+          "type": "string",
+          "description": "\"timeout\", \"refused\", \"not found\" or what the resolver said."
         }
       }
     }

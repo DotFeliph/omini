@@ -81,6 +81,8 @@ BANNERS = {
     587: "220 {fqdn} ESMTP Postfix (Ubuntu)",
 }
 DNS_GATEWAY = ("10.10.10.1", 53)  # HQ's CARP VIP on MGMT: Unbound on the OPNsense pair
+# Internet names the gateway's DNS resolves (Omini's DNS check asks for example.com).
+INTERNET = {"example.com": "93.184.215.14"}
 NETBIOS_DOMAIN = {"hq": "ACME", "branch": "ACME", "store": "LOJA", "lab": "WORKGROUP"}
 DESCRIPTION_PORT = 49152
 MDNS_GROUP = ("224.0.0.251", 5353)
@@ -485,9 +487,11 @@ def netbios_names(n: Node) -> list[tuple[str, int, bool]]:
 class DnsService(_ScanService, UdpService):
     """The HQ gateway's DNS: PTR and A records of every host of every site, NXDOMAIN otherwise."""
 
-    def __init__(self, ctx: Context, ip: str = DNS_GATEWAY[0], port: int = DNS_GATEWAY[1]) -> None:
+    def __init__(
+        self, ctx: Context, ip: str = DNS_GATEWAY[0], port: int = DNS_GATEWAY[1], nodes: list[Node] | None = None
+    ) -> None:
         gw = [n for n in ctx.world.nodes.values() if n.name in ("fw-hq-01", "fw-hq-02")]
-        super().__init__(ctx, gw or list(ctx.world.nodes.values())[:1], ip, port, "udp")
+        super().__init__(ctx, nodes or gw or list(ctx.world.nodes.values())[:1], ip, port, "udp")
         self._cache: tuple[int, dict[str, list[str]], dict[str, list[str]]] | None = None
 
     def reachable(self, snap: Snapshot) -> bool:
@@ -537,6 +541,9 @@ class DnsService(_ScanService, UdpService):
         elif key in fwd:
             if qtype in (TYPE_A, TYPE_ANY):
                 r.answers = [RR(name, TYPE_A, ip, 3600) for ip in fwd[key]]
+        elif key in INTERNET:  # resolved upstream, as Unbound forwards it
+            if qtype in (TYPE_A, TYPE_ANY):
+                r.answers = [RR(name, TYPE_A, INTERNET[key], 300)]
         else:
             r.flags |= 3  # NXDOMAIN
         if any(a.type == TYPE_OPT for a in q.additional):  # EDNS(0), like Unbound
@@ -869,6 +876,10 @@ def services(
     out.append(("mcast", *SSDP_GROUP, MulticastGroup(ctx, SSDP_GROUP, ssdp)))  # type: ignore[arg-type]
     if dns:
         out.append(("udp", dns[0], dns[1], DnsService(ctx, *dns)))
+    # Hosts listening on 53 (the domain controllers) serve the same zone, like AD DNS.
+    for ip, nodes in sorted(by_ip.items(), key=lambda kv: ipaddress.ip_address(kv[0])):
+        if any(53 in n.scan.get("ports", []) for n in nodes) and (ip, 53, "udp") not in taken and ip != DNS_GATEWAY[0]:
+            out.append(("udp", ip, 53, DnsService(ctx, ip, 53, nodes)))
     return out
 
 

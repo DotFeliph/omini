@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"time"
 
@@ -34,8 +35,19 @@ func (i *pluginIntegration) Info() integration.Info {
 	man := i.p.Manifest
 	return integration.Info{
 		Type: man.ID, Name: man.Name, Description: model.Deref(man.Description),
-		Kind: integration.KindPlugin, Fields: man.Fields,
+		Kind: integration.KindPlugin, Fields: man.Fields, Changes: man.Changes,
 	}
+}
+
+func (i *pluginIntegration) Apply(ctx context.Context, cfg integration.Config, change model.Change) ([]model.Device, error) {
+	if !slices.Contains(i.p.Manifest.Changes, change.Kind) {
+		return nil, fmt.Errorf("plugin %s cannot apply %s", i.p.Manifest.ID, change.Kind)
+	}
+	resp, err := i.m.runRequest(ctx, i.p, model.PluginActionApply, cfg, &change)
+	if err != nil {
+		return nil, err
+	}
+	return resp.Devices, nil
 }
 
 // Timeout lets the collector give the plugin its own time limit.
@@ -59,6 +71,11 @@ func (i *pluginIntegration) Test(ctx context.Context, cfg integration.Config) (s
 
 // run executes the plugin once: request on stdin, response on stdout.
 func (m *Manager) run(ctx context.Context, p *Plugin, action model.PluginAction, cfg integration.Config) (model.PluginResponse, error) {
+	return m.runRequest(ctx, p, action, cfg, nil)
+}
+
+// runRequest is run with the change to apply (action apply).
+func (m *Manager) runRequest(ctx context.Context, p *Plugin, action model.PluginAction, cfg integration.Config, change *model.Change) (model.PluginResponse, error) {
 	var resp model.PluginResponse
 	interpreter := m.Interpreter
 	if interpreter == "" {
@@ -72,7 +89,7 @@ func (m *Manager) run(ctx context.Context, p *Plugin, action model.PluginAction,
 		return resp, err
 	}
 	req, err := json.Marshal(model.PluginRequest{
-		Protocol: p.Manifest.Protocol, Action: action, Config: model.PluginRequestConfig(cfg), StateDir: &state,
+		Protocol: p.Manifest.Protocol, Action: action, Config: model.PluginRequestConfig(cfg), StateDir: &state, Change: change,
 	})
 	if err != nil {
 		return resp, err

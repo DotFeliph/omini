@@ -23,6 +23,7 @@ import (
 	"github.com/riccardoalv/omini/internal/collector"
 	"github.com/riccardoalv/omini/internal/flows"
 	"github.com/riccardoalv/omini/internal/integration"
+	"github.com/riccardoalv/omini/internal/model"
 	"github.com/riccardoalv/omini/internal/netscan"
 	"github.com/riccardoalv/omini/internal/nmapscan"
 	"github.com/riccardoalv/omini/internal/notify"
@@ -49,6 +50,7 @@ type config struct {
 	PluginDirs   []string // plugins loaded in place (development)
 	UV           string   // uv binary used to build plugin environments
 	PluginIndex  string   // the store's remote index; "" = only the shipped list
+	NoLogin      bool     // OMINI_AUTH=off: no login (development, loopback only)
 }
 
 func loadConfig(getenv func(string) string) (config, error) {
@@ -92,6 +94,18 @@ func loadConfig(getenv func(string) string) (config, error) {
 			return cfg, fmt.Errorf("OMINI_AUTOSCAN: %w", err)
 		}
 		cfg.AutoScan = b
+	}
+	switch v := getenv("OMINI_AUTH"); v {
+	case "", "on":
+	case "off":
+		// Only for development (the devnet): never on an address others reach.
+		host, _, err := net.SplitHostPort(cfg.Addr)
+		if ip := net.ParseIP(host); err != nil || (host != "localhost" && (ip == nil || !ip.IsLoopback())) {
+			return cfg, fmt.Errorf("OMINI_AUTH=off needs OMINI_ADDR on a loopback address (127.0.0.1:8080), not %q", cfg.Addr)
+		}
+		cfg.NoLogin = true
+	default:
+		return cfg, fmt.Errorf("OMINI_AUTH: %q is not on or off", v)
 	}
 	return cfg, nil
 }
@@ -190,14 +204,21 @@ func run(ctx context.Context, cfg config, ready chan<- string) error {
 		slog.Warn("network discovery is limited here", "missing", strings.Join(limited, ", "), "container", caps.Container)
 	}
 	notifier := &notify.Dispatcher{Store: st, Box: box}
-	coll := collector.New(st, reg, box, collector.Options{Interval: cfg.PollInterval, OnAlerts: notifier.Handle, DiscoveryLimited: caps.Limited()})
+	coll := collector.New(st, reg, box, collector.Options{
+		Interval: cfg.PollInterval, OnAlerts: notifier.Handle, DiscoveryLimited: caps.Limited(), Self: self(),
+	})
 	flowSvc.Round = func() time.Duration { return coll.RoundInterval(ctx) }
 	notifier.Topology = func() *topology.Topology {
 		t := coll.State().Topology
 		return &t
 	}
+	authService := auth.New(st, 0)
+	if cfg.NoLogin {
+		authService.NoLogin = true
+		slog.Warn("login is off (OMINI_AUTH=off): every request is signed in as the admin")
+	}
 	server := &api.Server{
-		Store: st, Registry: reg, Box: box, Collector: coll, Auth: auth.New(st, 0),
+		Store: st, Registry: reg, Box: box, Collector: coll, Auth: authService,
 		WebUI: webui.New(), Plugins: plugs, PluginIndex: index, Flows: flowSvc, UI: web.FS(), Version: version,
 		Icons:        appicons.NewServer(filepath.Join(cfg.DataDir, "icons")),
 		Capabilities: caps,
@@ -213,7 +234,18 @@ func run(ctx context.Context, cfg config, ready chan<- string) error {
 	}
 
 	errs := make(chan error, 2)
-	go func() { errs <- coll.Run(ctx) }()
+	// The collector stops before the database closes (deferred above): a
+	// round, or loading the last state, must never outlive it.
+	collCtx, stopColl := context.WithCancel(ctx)
+	collDone := make(chan struct{})
+	defer func() {
+		stopColl()
+		<-collDone
+	}()
+	go func() {
+		defer close(collDone)
+		errs <- coll.Run(collCtx)
+	}()
 	go func() {
 		if err := httpServer.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
 			errs <- err
@@ -323,4 +355,30 @@ func openSecret(box *secret.Box, v string) (string, error) {
 		return v, nil
 	}
 	return box.Open(v)
+}
+
+// self is this machine: the MACs and addresses of its network interfaces. In a
+// container with its own network they are the container's, which the rest of
+// the network does not see: Omini is then not found on the map.
+func self() collector.Self {
+	var s collector.Self
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return s
+	}
+	for _, i := range ifaces {
+		if i.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		if m := model.NormMAC(i.HardwareAddr.String()); m != "" {
+			s.MACs = append(s.MACs, m)
+		}
+		addrs, _ := i.Addrs()
+		for _, a := range addrs {
+			if p, ok := a.(*net.IPNet); ok && p.IP.To4() != nil {
+				s.IPs = append(s.IPs, p.IP.String())
+			}
+		}
+	}
+	return s
 }

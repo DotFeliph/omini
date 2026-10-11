@@ -53,7 +53,8 @@ type harness struct {
 	web    *fakeWeb
 }
 
-func newHarness(t *testing.T, ui *fstest.MapFS) *harness {
+// extraPlugins are more development plugin folders.
+func newHarness(t *testing.T, ui *fstest.MapFS, extraPlugins ...string) *harness {
 	t.Helper()
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "omini.db"))
@@ -69,7 +70,7 @@ func newHarness(t *testing.T, ui *fstest.MapFS) *harness {
 	plugDir := t.TempDir()
 	_ = os.WriteFile(filepath.Join(plugDir, "plugin.yaml"), []byte("id: fakefw\nname: Fake firewall\nversion: 1.0.0\nprotocol: 1\nentrypoint: main.sh\nfields:\n  - {key: url, type: url, required: true}\n"), 0o644)
 	_ = os.WriteFile(filepath.Join(plugDir, "main.sh"), []byte(`cat >/dev/null; echo '{"devices":[{"key":"fw","name":"fw","role":"firewall"}]}'`), 0o644)
-	plugs := &plugins.Manager{Dir: t.TempDir(), DevDirs: []string{plugDir}, Interpreter: "/bin/sh"}
+	plugs := &plugins.Manager{Dir: t.TempDir(), DevDirs: append([]string{plugDir}, extraPlugins...), Interpreter: "/bin/sh"}
 	loaded, _ := plugs.Load()
 	for _, p := range loaded {
 		reg.Register(plugs.Integration(p))

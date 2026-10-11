@@ -236,6 +236,9 @@ func collectInterfaces(c *client, d *model.Device) (map[string]string, error) {
 				d.MACs = append(d.MACs, mac)
 			}
 		}
+		if st, ok := pduInt(it[7][idx]); ok && (st == 1 || st == 2) {
+			iface.Enabled = model.Ptr(st == 1) // ifAdminStatus: down is disabled
+		}
 		if st, ok := pduInt(it[8][idx]); ok {
 			iface.Up = model.Ptr(st == 1)
 		}

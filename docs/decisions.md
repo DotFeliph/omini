@@ -15,6 +15,9 @@ choices and the reasons behind them.
 - [The map](#the-map)
 - [Screens and panels](#screens-and-panels)
 - [Alerts and notifications](#alerts-and-notifications)
+- [Configuration changes](#configuration-changes)
+- [VLANs](#vlans)
+- [DNS and DHCP](#dns-and-dhcp)
 - [Plugins](#plugins)
 - [Specific devices](#specific-devices)
 - [Operation](#operation)
@@ -23,8 +26,10 @@ choices and the reasons behind them.
 
 - **Identity.** Zero-config discovery and identification, easy integrations,
   and a live map of the network. Docs never compare Omini to other products.
-- **Read-only.** Omini never changes a device's configuration. Write actions
-  come later, behind explicit permissions (first candidate: Wake-on-LAN).
+- **Omini manages devices** (maintainer's rule, replacing "read-only"): it
+  maps the network and changes the configuration of the devices whose
+  integration supports it. Changes are added one at a time, simplest
+  first; see [Configuration changes](#configuration-changes).
 - **Devices without an API** are inferred from what other devices see (ARP,
   DHCP, MAC tables), or read by an optional scraping plugin.
 - **License** MIT. Nothing that would change that is shipped: nmap (NPSL) is
@@ -100,7 +105,13 @@ tested with fixtures). The rules that are easy to break:
 
 - **One machine, one node** (maintainer's rule): a device seen by several
   integrations, or by MAC in one and by IP in another, is merged; a device
-  reported without a MAC takes the one its address has (ARP, DHCP, scans).
+  reported without a MAC takes the one its address has (DHCP, scans, then
+  ARP).
+- **A machine with two interfaces is two nodes, each with its own address**
+  (cable and Wi-Fi). Linux answers ARP for either address from either
+  interface, so an ARP address leased to another MAC is ignored when the MAC
+  has a lease of its own. A MAC without a lease (a static address inside the
+  pool) keeps what ARP says: that is a real duplicate IP.
 - **A client stays where it was last seen for sure until it is seen
   elsewhere for sure** (maintainer's rule). For sure: an access point's
   client list, alone on a switch port, behind a desk phone. Not for sure: a
@@ -198,7 +209,107 @@ tested with fixtures). The rules that are easy to break:
   message per channel per round, a **card per device** with its details, what
   to do and a link to it (maintainer's rule: informative, and no emoji — the
   color says the severity). A flapping alert is not sent again within 30
-  minutes. "Send a test" sends an example.
+  minutes. Events (a restart, new devices) are never sent as resolved
+  (maintainer's rule: their end is no news). "Send a test" sends an example.
+
+## Configuration changes
+
+The interface stays as simple as possible (maintainer's rule): a change is a
+button where the thing is, not a configuration screen.
+
+- **Always available.** No switch turns changes on: a device whose
+  integration supports a change shows it.
+- **Vendor-neutral changes.** The core knows a short list of changes
+  (`port.enabled` first); a plugin declares the ones it supports in its
+  manifest and the UI shows only those. Vendor-only features stay in the
+  device's own interface.
+- **A port can be enabled or disabled when its integration reports its
+  state** (`enabled`): a plugin that cannot change a kind of device (a UniFi
+  access point) leaves it empty, and no button shows there. Today: the network
+  scan (SNMP), Horaco, MikroTik, UniFi, Omada and OpenWrt.
+- **Apply, verify, save.** The plugin applies the change, reads the device
+  again to confirm it took effect and the device still answers, and only then
+  saves it to the startup configuration. A change that lost the device is
+  never saved: a reboot undoes it.
+- **The map updates at once**: the device read after the change replaces its
+  data on the map. This is part of the change, not a "Run now".
+- **One short confirmation** for an ordinary change ("Disable port 5
+  (NixOS-Laptop)?").
+- **The device panel shows little** (maintainer's rule): the alerts, the ports
+  and the connected devices; the rest (details and health, identification,
+  changes, activity, traffic, VLANs, services...) folds to its title and a
+  summary, and the sections the user opens stay open. The port card has one
+  action (enable or disable) and a pencil to rename the port; what is connected
+  opens from the list of connected devices.
+- **Destructive changes are blocked by default** (maintainer's rule): only
+  those that hurt the network as a whole: cutting Omini off (the port where a
+  device learned Omini's MAC, or that leads to Omini's node) or cutting the
+  network off the internet (a device's uplink, a port where it learned the
+  router's or firewall's MAC, or that leads to one). Taking a device off the
+  network (an access point, a server, another switch) is an ordinary change.
+  Settings has **Allow destructive changes** (off by default); with it on, a
+  destructive change asks twice.
+- **SNMP devices** are changed through IF-MIB `ifAdminStatus` with a write
+  community (or the v3 user). SNMP has no standard save: the change lasts as
+  the device keeps it (most switches save on their own); a vendor save through
+  SNMP profiles waits until a profile needs it.
+- **Where Omini runs** is detected, never asked (maintainer's rule): the node
+  whose MAC or address is one of this machine's interfaces. In a container
+  with a network of its own the network sees the host instead, and Omini is
+  not found: then only the way to the internet is protected.
+- **History.** Every change (when, what, before and after, success or the
+  error) is kept for a year and shown in the device panel under **Changes**.
+- **A disabled port** shows as "Disabled" (not "No link") with an **Enable**
+  button; the client that was on it stays there, offline.
+- **Not planned** (maintainer's rule): jumbo frames, port mirroring, rate
+  limits, QoS, IGMP snooping and DHCP snooping. Risky changes (creating VLANs
+  and trunks, LAGs, global STP, management IP, password, firmware, restoring
+  a backup, factory reset) wait for a later decision.
+- **Order**: enable/disable a port (done: SNMP, Horaco, MikroTik, UniFi,
+  Omada, OpenWrt), then VLANs (below), the port's name, rebooting a device,
+  configuration backups with history, then reading STP, LAGs and SFP modules
+  into the map and alerts.
+
+## VLANs
+
+VLANs are managed for the whole network in one place (maintainer's rule):
+Omini keeps the network's VLANs and applies them to the devices, switch,
+access point and router alike.
+
+- **Omini is the source of truth.** The first time, it imports the VLANs the
+  devices already have into the network's catalog (id, name, color, subnet).
+  From then on VLANs are created, renamed and deleted in Omini, which applies
+  them to each device. A device that differs from the catalog (changed by
+  hand) raises an alert.
+- **Ports**: access (one untagged VLAN) and trunk (tagged VLANs, with or
+  without a native one), only with VLANs of the catalog. The port's VLANs are
+  a vendor-neutral change (`port.vlans`).
+- **The path is automatic.** Putting a port in a VLAN creates the VLAN on
+  every switch on the way to the router and tags it on each uplink, from the
+  map. Omini shows what it will change on each device before asking for one
+  confirmation.
+- **The same protection**: changing the VLANs of the port Omini comes
+  through, or of the way to the internet, is destructive.
+- **Phases**: first the catalog and the switches (Horaco, the maintainer's,
+  tested for real; then MikroTik, UniFi, Omada, OpenWrt and SNMP), then the
+  router (OPNsense first): the VLAN's interface and subnet, its DHCP pool and
+  basic firewall rules (internet access; isolated from the other VLANs or
+  not, per VLAN).
+
+## DNS and DHCP
+
+- **One screen, "DNS and DHCP"**, with a tab each: servers, pools (range and
+  usage) and leases for DHCP; servers and response times for DNS; and the
+  result of each check.
+- **DHCP is checked every round**: Omini sends a DHCPDISCOVER and waits for
+  the offer (it never sends a REQUEST: no address is taken). No offer is an
+  alert. More than one server answering is an alert too (a rogue DHCP server:
+  a router plugged in the wrong way), with its address and MAC. A pool almost
+  full is the existing alert.
+- **DNS is checked every round**: each DNS server of the network (those DHCP
+  hands out and those integrations know) resolves an external and a local
+  name, timed. Alerts: not answering, slow, a local name that does not
+  resolve.
 
 ## Plugins
 

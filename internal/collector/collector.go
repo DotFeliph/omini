@@ -54,6 +54,9 @@ type Options struct {
 	OnAlerts func([]store.AlertChange)
 	// DiscoveryLimited: what the network scan cannot do here (netscan.Capabilities.Limited).
 	DiscoveryLimited []string
+	// Self is the machine Omini runs on (its MACs and addresses): the way to
+	// it is protected from destructive changes (see ProtectedPorts).
+	Self Self
 }
 
 type Collector struct {
@@ -84,6 +87,16 @@ type Collector struct {
 	// The next round was asked for by the user: integrations skip their
 	// caches (a deep scan, an nmap scan now).
 	forceNext atomic.Bool
+
+	// One run of an integration at a time (a collection or a change): a device
+	// is never asked two things at once. A change does not wait for the round.
+	busyMu sync.Mutex
+	busy   map[int64]*sync.Mutex
+	// When a change last replaced each integration's devices: a collection
+	// that started before it is older than the map and is dropped.
+	applied map[int64]time.Time
+	// One rebuild at a time (a round and a change may finish together).
+	rebuildMu sync.Mutex
 }
 
 func New(st *store.Store, reg *integration.Registry, box *secret.Box, opts Options) *Collector {
@@ -99,6 +112,8 @@ func New(st *store.Store, reg *integration.Registry, box *secret.Box, opts Optio
 	return &Collector{
 		store: st, reg: reg, box: box, opts: opts,
 		snaps:      map[int64]store.Snapshot{},
+		busy:       map[int64]*sync.Mutex{},
+		applied:    map[int64]time.Time{},
 		traffic:    newTrafficMeter(),
 		trigger:    make(chan struct{}, 1),
 		reschedule: make(chan struct{}, 1),
@@ -255,6 +270,9 @@ func (c *Collector) collect(ctx context.Context, pick func(store.Integration) bo
 	}
 	c.mu.Unlock()
 	for _, r := range results {
+		if c.changedSince(r) {
+			continue // a change replaced these devices after this collection started
+		}
 		snaps[r.IntegrationID] = r
 		c.traffic.observe(r)
 		if err := c.store.SaveSnapshot(ctx, r); err != nil {
@@ -289,13 +307,15 @@ func (c *Collector) CollectIntegration(ctx context.Context, id int64) (Status, e
 		return Status{}, ErrDisabled
 	}
 	snap := c.collectOne(integration.WithForce(ctx), in)
-	c.traffic.observe(snap)
-	if err := c.store.SaveSnapshot(ctx, snap); err != nil {
-		slog.Error("save snapshot", "integration", snap.IntegrationID, "err", err)
+	if !c.changedSince(snap) {
+		c.traffic.observe(snap)
+		if err := c.store.SaveSnapshot(ctx, snap); err != nil {
+			slog.Error("save snapshot", "integration", snap.IntegrationID, "err", err)
+		}
+		c.mu.Lock()
+		c.snaps[id] = snap
+		c.mu.Unlock()
 	}
-	c.mu.Lock()
-	c.snaps[id] = snap
-	c.mu.Unlock()
 	if err := c.rebuild(ctx); err != nil {
 		return Status{}, err
 	}
@@ -306,6 +326,8 @@ func (c *Collector) CollectIntegration(ctx context.Context, id int64) (Status, e
 }
 
 func (c *Collector) collectOne(ctx context.Context, in store.Integration) store.Snapshot {
+	busy := c.lockIntegration(in.ID)
+	defer busy.Unlock()
 	start := c.opts.Now()
 	devices, err := c.runIntegration(ctx, in)
 	snap := store.Snapshot{
@@ -355,6 +377,8 @@ func (c *Collector) runIntegration(ctx context.Context, in store.Integration) (d
 }
 
 func (c *Collector) rebuild(ctx context.Context) error {
+	c.rebuildMu.Lock()
+	defer c.rebuildMu.Unlock()
 	c.mu.RLock()
 	snaps := make([]store.Snapshot, 0, len(c.snaps))
 	for _, s := range c.snaps {
@@ -424,6 +448,7 @@ func (c *Collector) rebuild(ctx context.Context) error {
 		topo.Nodes[i].PortLabels = labels[topo.Nodes[i].ID]
 	}
 	c.traffic.attach(&topo)
+	c.markChangeable(ctx, &topo)
 	alerts := c.watch(ctx, topo, inventory, statuses, now)
 
 	c.mu.Lock()

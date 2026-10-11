@@ -17,6 +17,7 @@ Everything here is read-only: Omini never changes a device's configuration.
 - [Subnets and the routers' networks](#subnets-and-the-routers-networks)
 - [SNMP](#snmp)
 - [nmap](#nmap)
+- [DNS and DHCP checks](#dns-and-dhcp-checks)
 - [Device identification](#device-identification)
 - [Traffic flows](#traffic-flows)
 
@@ -40,6 +41,8 @@ its settings are in **Integrations → Network scan**.
 | SSH banners | SSH banners | The SSH version line, which often names the operating system |
 | DHCP fingerprints | DHCP fingerprints | What each device asks for when it requests an address (see [DHCP fingerprints](#dhcp-fingerprints)) |
 | SNMP | SNMP | Ports, traffic, neighbors, MAC tables and ARP from managed devices. See [SNMP](#snmp) |
+| DHCP check | DHCP check | Whether the DHCP server answers, and whether another one does too. See [DNS and DHCP checks](#dns-and-dhcp-checks) |
+| DNS check | DNS check | Whether each DNS server resolves an internet name and a local one, and how fast |
 
 To keep the network quiet, ports, names, banners and web titles are checked
 once for each new device and again every 6 hours (**Advanced → Re-check ports
@@ -106,7 +109,7 @@ are read in full on every round:
 | Data | From |
 |---|---|
 | Name, description, uptime, vendor | `SNMPv2-MIB` |
-| Ports: name, status, speed, MAC, byte and error counters | `IF-MIB` |
+| Ports: name, status (enabled or disabled), speed, MAC, byte and error counters | `IF-MIB` |
 | Neighbors | `LLDP-MIB` |
 | MAC table (which device is on which port, VLAN) | `BRIDGE-MIB`, `Q-BRIDGE-MIB` |
 | ARP | `IP-MIB` |
@@ -114,7 +117,9 @@ are read in full on every round:
 
 To use it:
 
-1. Enable SNMP on the device, read-only. Enable **LLDP** too if it has it:
+1. Enable SNMP on the device, with a read-write community (or a v3 user
+   allowed to write) to enable and disable its ports from Omini, or
+   read-only for the map alone. Enable **LLDP** too if it has it:
    links between switches are then confirmed instead of inferred.
 2. In **Integrations → Network scan**, set **SNMP communities**: the
    read-only communities to try, separated by commas (`public, homelab`).
@@ -124,6 +129,13 @@ To use it:
    and privacy (none, DES, AES-128, AES-192 or AES-256) with its password. v3
    is tried before the communities. Omini remembers which credential each host
    answered to.
+4. To **enable and disable ports** of SNMP devices from the map, set the
+   **SNMP write community** (the device's "read-write" community). A device
+   that answered to the v3 user is written with that user, when its view
+   allows writing. Omini sets the port's `ifAdminStatus` (IF-MIB) and reads it
+   back. SNMP has no standard "save": most switches keep the change on their
+   own; some (Cisco IOS among them) need "write memory" on the device for it
+   to survive a reboot.
 
 Communities and passwords are stored encrypted and never shown again.
 
@@ -215,6 +227,30 @@ them with a packet socket filtered in the kernel to UDP port 67).
   and desk phones that name themselves. No third-party database is used.
 
 Turn it off in **Integrations → Network scan → Methods → DHCP fingerprints**.
+
+## DNS and DHCP checks
+
+Every round the network scan checks the services every device depends on.
+The results are on the **DNS & DHCP** screen (a tab each), and problems
+become alerts.
+
+- **DHCP**: on each network this server is on, Omini asks for an address
+  (DHCPDISCOVER, broadcast) and collects the offers. It never sends a
+  REQUEST, so no address is taken, and it asks with its own MAC: the server
+  offers the address Omini already has, not one of its pool. No offer is the
+  `dhcp_no_offer` alert; a second server answering that is not a router or
+  a device known to serve DHCP is `dhcp_rogue` (often a home router plugged
+  in by a LAN port), with its address and MAC. Needs raw sockets (root in
+  Docker) and host networking.
+- **DNS**: the servers are those DHCP hands out, the gateway, and the hosts
+  listening on port 53. Each one resolves an internet name (**Advanced →
+  External name for the DNS check**, `example.com` by default) and a local
+  name the scan learned from reverse DNS, timed. Alerts: `dns_down` (the
+  internet name does not resolve), `dns_slow` (over 500 ms), `dns_local`
+  (the internet name resolves, the local one does not).
+
+The screen also lists the DHCP pools and leases the routers' integrations
+report (OPNsense, pfSense, OpenWrt...), with a search.
 
 ## Device identification
 

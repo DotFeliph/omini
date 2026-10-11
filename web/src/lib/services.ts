@@ -71,3 +71,6 @@ export function serviceName(proto: number, port: number): string {
   const p = PROTO[proto] ?? `IP ${proto}`
   return port ? `${p} ${port}` : p
 }
+
+/** When a DNS answer counts as slow (the dns_slow alert, internal/insights). */
+export const DNS_SLOW_MS = 500

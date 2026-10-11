@@ -30,7 +30,8 @@ plugin repositories next to this one (`../omini-plugin-*`, or `OMINI_DEVNET_PLUG
    the integrations: the network scan with Acme's SNMP credentials and one integration per emulated API;
 5. forwards http://127.0.0.1:8093 on this machine to Omini inside the namespace.
 
-Credentials are generated test values in `data-devnet/devnet-admin.json` (Omini's admin) and
+There is no login on this machine (`OMINI_AUTH=off`, accepted only on a loopback address); with `DEVNET_BIND`
+elsewhere the login comes back. Credentials are generated test values in `data-devnet/devnet-admin.json` (Omini's admin) and
 `data-devnet/devnet-secrets.json` (the emulated devices'), never printed. Delete `data-devnet/` to start over.
 
 | Variable | Default | |

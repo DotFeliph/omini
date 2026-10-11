@@ -2,6 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { api } from '@/lib/api'
+import { prefs } from '@/lib/prefs'
 import type { TopoNode } from '@/lib/types'
 
 import NodePanel from '../map/NodePanel.vue'
@@ -352,15 +353,26 @@ describe('NodePanel layout', () => {
     expect(w.find('[data-test=tile-uptime]').exists()).toBe(true)
   })
 
-  it('draws the ports right below CPU and memory', () => {
+  it('shows ports and connected devices; the rest folds to its title and a summary', async () => {
+    prefs.openSections = []
     const w = mountPanel(opnsense)
     const html = w.html()
-    const bars = html.indexOf('data-test="bar-memory"')
     const ports = html.indexOf('data-test="ports-section"')
-    const details = html.indexOf('class="block classification"')
-    expect(bars).toBeGreaterThan(0)
-    expect(ports).toBeGreaterThan(bars)
+    const details = html.indexOf('data-section="details"')
+    expect(ports).toBeGreaterThan(0)
     expect(details).toBeGreaterThan(ports)
+    const shown = (section: string) =>
+      !w.get(`[data-section=${section}] .content`).attributes('style')?.includes('display: none')
+    expect(shown('ports')).toBe(true)
+    // Details (health bars included) start folded, and stay open once opened.
+    const fold = w.get('[data-test=fold-details]')
+    expect(fold.attributes('aria-expanded')).toBe('false')
+    expect(shown('details')).toBe(false)
+    await fold.trigger('click')
+    expect(shown('details')).toBe(true)
+    expect(w.find('[data-section=details] [data-test=bar-memory]').exists()).toBe(true)
+    expect(prefs.openSections).toContain('details')
+    prefs.openSections = []
   })
 
   it('is resized by dragging its left edge, and remembers the width', async () => {

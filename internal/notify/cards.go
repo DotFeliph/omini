@@ -193,6 +193,11 @@ var tips = map[string]map[string]string{
 		"insecure_service":      "Turn it off on the device, or use SSH, SFTP or HTTPS instead.",
 		"new_devices_burst":     "A visitor, a new appliance... or someone who should not be on your network.",
 		"discovery_limited":     "See Integrations → Network scan: what is missing and how to fix it (usually network_mode: host).",
+		"dhcp_no_offer":         "Check the router's DHCP server is on, and the cable from this network to it.",
+		"dhcp_rogue":            "Find the device with that address and MAC (often a home router plugged in by a LAN port) and turn its DHCP off.",
+		"dns_down":              "Check the DNS server is running and has internet access; the DHCP may hand out another one meanwhile.",
+		"dns_slow":              "Check its upstream servers and its load.",
+		"dns_local":             "Check the DNS server knows the local domain (DHCP host names, local records).",
 	},
 	"pt-BR": {
 		"device_offline":        "Veja se está ligado e conectado; se estiver, confira o endereço e as credenciais da integração.",
@@ -223,6 +228,11 @@ var tips = map[string]map[string]string{
 		"insecure_service":      "Desligue no equipamento, ou use SSH, SFTP ou HTTPS no lugar.",
 		"new_devices_burst":     "Uma visita, um aparelho novo... ou alguém que não deveria estar na sua rede.",
 		"discovery_limited":     "Veja em Integrações → Network scan o que falta e como resolver (quase sempre network_mode: host).",
+		"dhcp_no_offer":         "Veja se o servidor DHCP do roteador está ligado, e o cabo desta rede até ele.",
+		"dhcp_rogue":            "Ache o aparelho com esse endereço e MAC (quase sempre um roteador ligado por uma porta LAN) e desligue o DHCP dele.",
+		"dns_down":              "Veja se o servidor DNS está rodando e tem internet; enquanto isso, o DHCP pode entregar outro.",
+		"dns_slow":              "Veja os servidores para onde ele encaminha e a carga dele.",
+		"dns_local":             "Veja se o servidor DNS conhece o domínio local (nomes do DHCP, registros locais).",
 	},
 }
 

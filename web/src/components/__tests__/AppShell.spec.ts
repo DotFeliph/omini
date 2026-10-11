@@ -82,13 +82,13 @@ describe('AppShell', () => {
     const links = () => w.findAll('a').map((a) => a.attributes('href'))
     let w = mount(AppShell, { global: { plugins: [...plugins(), router] } })
     await flushPromises()
-    expect(links()).toEqual(['/', '/alerts', '/integrations', '/settings'])
+    expect(links()).toEqual(['/', '/alerts', '/dns-dhcp', '/integrations', '/settings'])
     w.unmount()
 
     vi.mocked(api.integrations).mockResolvedValue([flows(true)])
     w = mount(AppShell, { global: { plugins: [...plugins(), router] } })
     await flushPromises()
-    expect(links()).toEqual(['/', '/alerts', '/flows', '/integrations', '/settings'])
+    expect(links()).toEqual(['/', '/alerts', '/flows', '/dns-dhcp', '/integrations', '/settings'])
 
     // Turned off: the entry goes away.
     noteIntegrations([flows(false)])

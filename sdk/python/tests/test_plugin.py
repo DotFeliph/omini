@@ -90,6 +90,36 @@ def test_missing_functions():
     assert code == 1 and "no @plugin.collect" in resp["error"]
 
 
+def apply_request(change):
+    return json.dumps({"protocol": 1, "action": "apply", "config": {}, "change": change})
+
+
+def test_apply(plugin):
+    seen = []
+
+    @plugin.apply
+    def apply(cfg, change):
+        seen.append(change)
+        return [Device(key="sw", name="sw", interfaces=[Interface(name="Port 5", enabled=False)])]
+
+    change = {"device": "sw", "kind": "port.enabled", "port": "Port 5", "value": False}
+    resp, code = plugin.handle(apply_request(change))
+    assert code == 0
+    assert resp["devices"][0]["interfaces"] == [{"name": "Port 5", "enabled": False}]
+    assert seen[0].kind == "port.enabled" and seen[0].port == "Port 5" and seen[0].value is False
+
+
+def test_apply_needs_a_function_and_a_change(plugin):
+    change = {"device": "sw", "kind": "port.enabled", "port": "Port 5", "value": False}
+    resp, code = plugin.handle(apply_request(change))
+    assert code == 1 and "no @plugin.apply" in resp["error"]
+    plugin.apply(lambda cfg, change: [])
+    resp, code = plugin.handle(apply_request(None))
+    assert code == 1 and resp["error"] == "no change to apply"
+    resp, code = plugin.handle(apply_request({**change, "kind": "port.mirror"}))
+    assert code == 2
+
+
 def test_run_writes_one_json_line(plugin):
     out = io.StringIO()
     with pytest.raises(SystemExit) as e:

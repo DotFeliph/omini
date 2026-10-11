@@ -138,3 +138,22 @@ func TestChangeAndResetPassword(t *testing.T) {
 		t.Fatalf("unknown user: %v", err)
 	}
 }
+
+func TestNoLoginSignsInAsTheAdmin(t *testing.T) {
+	ctx := context.Background()
+	s := newService(t)
+	s.NoLogin = true
+	if _, err := s.Authenticate(ctx, ""); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("before the admin exists the setup page shows: %v", err)
+	}
+	if _, _, err := s.Setup(ctx, "admin", "correct horse battery"); err != nil {
+		t.Fatal(err)
+	}
+	if u, err := s.Authenticate(ctx, ""); err != nil || u.Username != "admin" {
+		t.Fatalf("no session: %+v %v", u, err)
+	}
+	s.NoLogin = false
+	if _, err := s.Authenticate(ctx, ""); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("login required again: %v", err)
+	}
+}

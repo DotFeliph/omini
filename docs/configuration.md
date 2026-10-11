@@ -19,6 +19,7 @@ starts; everything else is changed in the web UI and stored in the database.
 | `OMINI_SECRET_KEY` | (generated) | Base64 of a 32-byte key used to encrypt credentials in the database. When unset, Omini creates `<data dir>/secret.key` on first start. Back it up with the database |
 | `OMINI_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. `debug` also shows what plugins write to stderr |
 | `OMINI_AUTOSCAN` | `true` | Create the Network scan integration on first start (when there are no integrations yet) |
+| `OMINI_AUTH` | `on` | `off` turns the login off, for development only: accepted only when `OMINI_ADDR` is a loopback address (the devnet uses it) |
 | `OMINI_NMAP` | (unset) | Docker image only: `install` installs nmap when the container starts |
 | `OMINI_NMAP_PRIVILEGED` | `false` | `true` when the nmap binary has raw-socket capabilities while Omini does not run as root, so nmap may detect operating systems (see [nmap without root](discovery.md#nmap-without-root)) |
 | `OMINI_PLUGIN_DIRS` | (unset) | Comma-separated folders of plugins loaded in place, without installing them (plugin development, see [Writing a plugin](plugins.md#development-mode)) |
@@ -106,6 +107,7 @@ with `?section=` (for example `/settings?section=notifications`).
 |---|---|
 | **General** | Theme (follow the system, dark or light) and language (English or Brazilian Portuguese). The language is saved for your user and applied when you sign in |
 | **Map** | "Group clients when there are more than" N: above this many clients, an access point, switch port or segment folds them into a bubble (default 8). See [Folding](map.md#folding-children-into-bubbles) |
+| **Changes** | **Allow destructive changes** (off by default): changes that cut Omini off, or the network off the internet, such as disabling a switch's uplink or the router's port. Off, they are blocked; on, each one asks twice. See [the device panel](map.md#the-device-panel) |
 | **Notifications** | Where alerts are sent: Telegram, e-mail, Slack, Discord, ntfy or a webhook. See [Notifications](alerts.md#notifications) |
 | **Account** | Who is signed in, and **Sign out** |
 | **About** | The running version and a link to the source code |

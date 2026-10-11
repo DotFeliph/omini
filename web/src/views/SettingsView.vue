@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { Bell, Info, Map as MapIcon, Palette, UserRound } from 'lucide-vue-next'
+import { Bell, Info, Map as MapIcon, Palette, ShieldAlert, UserRound } from 'lucide-vue-next'
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 
 import NotificationsSection from '@/components/NotificationsSection.vue'
+import ToggleSwitch from '@/components/ToggleSwitch.vue'
 import { locales } from '@/i18n'
 import { api, ApiError } from '@/lib/api'
 import { prefs } from '@/lib/prefs'
@@ -72,6 +73,7 @@ async function savePassword() {
 const sections = [
   { id: 'general', icon: Palette },
   { id: 'map', icon: MapIcon },
+  { id: 'changes', icon: ShieldAlert },
   { id: 'notifications', icon: Bell },
   { id: 'account', icon: UserRound },
   { id: 'about', icon: Info },
@@ -86,11 +88,30 @@ function go(id: Section) {
   void router.replace({ query: { ...route.query, section: id } })
 }
 
+// Destructive changes (cutting Omini or other gear off): off by default.
+const allowDestructive = ref(false)
+const changesError = ref('')
+async function setAllowDestructive(on: boolean) {
+  changesError.value = ''
+  try {
+    allowDestructive.value = (
+      await api.setChangeSettings({ allow_destructive: on })
+    ).allow_destructive
+  } catch (e) {
+    changesError.value = e instanceof ApiError ? e.message : t('common.error')
+  }
+}
+
 onMounted(async () => {
   try {
     version.value = (await api.health()).version
   } catch {
     // version is informative only
+  }
+  try {
+    allowDestructive.value = (await api.changeSettings()).allow_destructive
+  } catch {
+    // shown as off
   }
 })
 </script>
@@ -176,6 +197,24 @@ onMounted(async () => {
                 max="100"
               />
             </div>
+          </div>
+        </template>
+
+        <template v-else-if="current === 'changes'">
+          <div class="rows card">
+            <div class="row">
+              <div class="row-text">
+                <span class="label">{{ t('settings.changes.destructive') }}</span>
+                <small class="muted">{{ t('settings.changes.destructiveHint') }}</small>
+              </div>
+              <ToggleSwitch
+                :model-value="allowDestructive"
+                :label="t('settings.changes.destructive')"
+                data-test="allow-destructive"
+                @update:model-value="setAllowDestructive"
+              />
+            </div>
+            <p v-if="changesError" class="error" role="alert">{{ changesError }}</p>
           </div>
         </template>
 

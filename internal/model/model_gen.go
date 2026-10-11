@@ -40,6 +40,75 @@ func (j *ArpEntry) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// One configuration change to apply to a device.
+type Change struct {
+	// Key of the device, as the plugin reported it.
+	Device string `json:"device" yaml:"device"`
+
+	// Kind corresponds to the JSON schema field "kind".
+	Kind ChangeKind `json:"kind" yaml:"kind"`
+
+	// Interface name, for the changes of a port.
+	Port *string `json:"port,omitempty,omitzero" yaml:"port,omitempty"`
+
+	// The new value: a boolean for port.enabled, a PortVlans object for port.vlans.
+	Value interface{} `json:"value" yaml:"value"`
+}
+
+type ChangeKind string
+
+const ChangeKindPortEnabled ChangeKind = "port.enabled"
+const ChangeKindPortVlans ChangeKind = "port.vlans"
+
+var enumValues_ChangeKind = []interface{}{
+	"port.enabled",
+	"port.vlans",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ChangeKind) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ChangeKind {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ChangeKind, v)
+	}
+	*j = ChangeKind(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *Change) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["device"]; raw != nil && !ok {
+		return fmt.Errorf("field device in Change: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in Change: required")
+	}
+	if _, ok := raw["value"]; raw != nil && !ok {
+		return fmt.Errorf("field value in Change: required")
+	}
+	type Plain Change
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = Change(plain)
+	return nil
+}
+
 // Vendor-neutral snapshot of one network device, as collected by an integration.
 type Device struct {
 	// Arp corresponds to the JSON schema field "arp".
@@ -51,11 +120,17 @@ type Device struct {
 	// CPUPct corresponds to the JSON schema field "cpu_pct".
 	CPUPct *float64 `json:"cpu_pct,omitempty,omitzero" yaml:"cpu_pct,omitempty"`
 
+	// DHCP checks on this network (network scan): what answered a DHCPDISCOVER.
+	DhcpChecks []DhcpCheck `json:"dhcp_checks,omitempty,omitzero" yaml:"dhcp_checks,omitempty"`
+
 	// DhcpLeases corresponds to the JSON schema field "dhcp_leases".
 	DhcpLeases []DhcpLease `json:"dhcp_leases,omitempty,omitzero" yaml:"dhcp_leases,omitempty"`
 
 	// Usage of each DHCP range.
 	DhcpPools []DhcpPool `json:"dhcp_pools,omitempty,omitzero" yaml:"dhcp_pools,omitempty"`
+
+	// DNS checks of the servers of this network (network scan).
+	DnsChecks []DnsCheck `json:"dns_checks,omitempty,omitzero" yaml:"dns_checks,omitempty"`
 
 	// Fdb corresponds to the JSON schema field "fdb".
 	Fdb []FdbEntry `json:"fdb,omitempty,omitzero" yaml:"fdb,omitempty"`
@@ -230,6 +305,37 @@ func (j *Device) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// A DHCPDISCOVER sent on one interface and the offers that came back (no address
+// is taken).
+type DhcpCheck struct {
+	// Why the check could not run (then nothing is known about the servers).
+	Error *string `json:"error,omitempty,omitzero" yaml:"error,omitempty"`
+
+	// Interface corresponds to the JSON schema field "interface".
+	Interface string `json:"interface" yaml:"interface"`
+
+	// Offers corresponds to the JSON schema field "offers".
+	Offers []DhcpOffer `json:"offers,omitempty,omitzero" yaml:"offers,omitempty"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *DhcpCheck) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["interface"]; raw != nil && !ok {
+		return fmt.Errorf("field interface in DhcpCheck: required")
+	}
+	type Plain DhcpCheck
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = DhcpCheck(plain)
+	return nil
+}
+
 // What a device asks for when it requests an address (DHCP): the options it wants,
 // in its own order, and what it says it is. Hints its operating system.
 type DhcpFingerprint struct {
@@ -279,6 +385,54 @@ func (j *DhcpLease) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// An answer to the DHCPDISCOVER.
+type DhcpOffer struct {
+	// DNS servers it hands out (option 6).
+	Dns []string `json:"dns,omitempty,omitzero" yaml:"dns,omitempty"`
+
+	// Domain corresponds to the JSON schema field "domain".
+	Domain *string `json:"domain,omitempty,omitzero" yaml:"domain,omitempty"`
+
+	// LeaseS corresponds to the JSON schema field "lease_s".
+	LeaseS *uint64 `json:"lease_s,omitempty,omitzero" yaml:"lease_s,omitempty"`
+
+	// OfferedIP corresponds to the JSON schema field "offered_ip".
+	OfferedIP *string `json:"offered_ip,omitempty,omitzero" yaml:"offered_ip,omitempty"`
+
+	// Routers corresponds to the JSON schema field "routers".
+	Routers []string `json:"routers,omitempty,omitzero" yaml:"routers,omitempty"`
+
+	// RttMs corresponds to the JSON schema field "rtt_ms".
+	RttMs *float64 `json:"rtt_ms,omitempty,omitzero" yaml:"rtt_ms,omitempty"`
+
+	// The server identifier (option 54), else the sender.
+	ServerIP string `json:"server_ip" yaml:"server_ip"`
+
+	// ServerMAC corresponds to the JSON schema field "server_mac".
+	ServerMAC *MACAddress `json:"server_mac,omitempty,omitzero" yaml:"server_mac,omitempty"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *DhcpOffer) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["server_ip"]; raw != nil && !ok {
+		return fmt.Errorf("field server_ip in DhcpOffer: required")
+	}
+	type Plain DhcpOffer
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if plain.RttMs != nil && 0 > *plain.RttMs {
+		return fmt.Errorf("field %s: must be >= %v", "rtt_ms", 0)
+	}
+	*j = DhcpOffer(plain)
+	return nil
+}
+
 // Usage of a DHCP range.
 type DhcpPool struct {
 	// Interface or subnet the range serves, e.g. "LAN", "192.168.1.0/24".
@@ -306,6 +460,78 @@ func (j *DhcpPool) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	*j = DhcpPool(plain)
+	return nil
+}
+
+// A DNS server and the test queries it answered.
+type DnsCheck struct {
+	// External corresponds to the JSON schema field "external".
+	External *DnsQuery `json:"external,omitempty,omitzero" yaml:"external,omitempty"`
+
+	// Local corresponds to the JSON schema field "local".
+	Local *DnsQuery `json:"local,omitempty,omitzero" yaml:"local,omitempty"`
+
+	// Server corresponds to the JSON schema field "server".
+	Server string `json:"server" yaml:"server"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *DnsCheck) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["server"]; raw != nil && !ok {
+		return fmt.Errorf("field server in DnsCheck: required")
+	}
+	type Plain DnsCheck
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = DnsCheck(plain)
+	return nil
+}
+
+// One test query.
+type DnsQuery struct {
+	// Answers corresponds to the JSON schema field "answers".
+	Answers []string `json:"answers,omitempty,omitzero" yaml:"answers,omitempty"`
+
+	// "timeout", "refused", "not found" or what the resolver said.
+	Error *string `json:"error,omitempty,omitzero" yaml:"error,omitempty"`
+
+	// Name corresponds to the JSON schema field "name".
+	Name string `json:"name" yaml:"name"`
+
+	// The name resolved.
+	Ok bool `json:"ok" yaml:"ok"`
+
+	// RttMs corresponds to the JSON schema field "rtt_ms".
+	RttMs *float64 `json:"rtt_ms,omitempty,omitzero" yaml:"rtt_ms,omitempty"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *DnsQuery) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in DnsQuery: required")
+	}
+	if _, ok := raw["ok"]; raw != nil && !ok {
+		return fmt.Errorf("field ok in DnsQuery: required")
+	}
+	type Plain DnsQuery
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if plain.RttMs != nil && 0 > *plain.RttMs {
+		return fmt.Errorf("field %s: must be >= %v", "rtt_ms", 0)
+	}
+	*j = DnsQuery(plain)
 	return nil
 }
 
@@ -638,6 +864,10 @@ type Interface struct {
 	// Duplex corresponds to the JSON schema field "duplex".
 	Duplex *InterfaceDuplex `json:"duplex,omitempty,omitzero" yaml:"duplex,omitempty"`
 
+	// Administrative status: false when the port is disabled in the device's
+	// configuration.
+	Enabled *bool `json:"enabled,omitempty,omitzero" yaml:"enabled,omitempty"`
+
 	// Addresses assigned to the interface, with prefix length (192.168.1.1/24).
 	IPs []string `json:"ips,omitempty,omitzero" yaml:"ips,omitempty"`
 
@@ -959,12 +1189,14 @@ func (j *Neighbor) UnmarshalJSON(value []byte) error {
 
 type PluginAction string
 
+const PluginActionApply PluginAction = "apply"
 const PluginActionCollect PluginAction = "collect"
 const PluginActionTest PluginAction = "test"
 
 var enumValues_PluginAction = []interface{}{
 	"collect",
 	"test",
+	"apply",
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -991,6 +1223,9 @@ func (j *PluginAction) UnmarshalJSON(value []byte) error {
 type PluginManifest struct {
 	// Author corresponds to the JSON schema field "author".
 	Author *string `json:"author,omitempty,omitzero" yaml:"author,omitempty"`
+
+	// Configuration changes the plugin can apply (action apply).
+	Changes []ChangeKind `json:"changes,omitempty,omitzero" yaml:"changes,omitempty"`
 
 	// Description corresponds to the JSON schema field "description".
 	Description *string `json:"description,omitempty,omitzero" yaml:"description,omitempty"`
@@ -1066,6 +1301,9 @@ func (j *PluginManifest) UnmarshalJSON(value []byte) error {
 type PluginRequest struct {
 	// Action corresponds to the JSON schema field "action".
 	Action PluginAction `json:"action" yaml:"action"`
+
+	// The change to apply (action apply only).
+	Change *Change `json:"change,omitempty,omitzero" yaml:"change,omitempty"`
 
 	// Values of the manifest fields, keyed by field key.
 	Config PluginRequestConfig `json:"config" yaml:"config"`

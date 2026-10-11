@@ -277,6 +277,9 @@ async def start_services(hub: Hub, ctx: Context) -> None:
         log.warning("devnet: no scan services (emulator/scan.py missing)")
         return
     await scan.start(hub, ctx, taken)
+    from . import dhcp
+
+    hub.servers.append(await dhcp.start(OMINI_IP))
 
 
 def inner(args: Any) -> int:
@@ -314,6 +317,10 @@ def inner(args: Any) -> int:
                 "UV_OFFLINE": "1",
             }
         )
+        # No login on this machine; with DEVNET_BIND on another address, others
+        # can reach the UI, so the login stays.
+        if getattr(args, "bind", "127.0.0.1") in ("127.0.0.1", "localhost", "::1"):
+            env["OMINI_AUTH"] = "off"
         omini = await asyncio.create_subprocess_exec(args.omini, env=env, cwd=os.getcwd())
         loop = asyncio.get_running_loop()
         stop = asyncio.Event()

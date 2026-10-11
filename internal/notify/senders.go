@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -113,6 +114,11 @@ func (w *webhook) Send(ctx context.Context, m Message) error {
 func do(client *http.Client, req *http.Request) error {
 	resp, err := client.Do(req)
 	if err != nil {
+		// The client's error carries the whole URL: a webhook's token or a
+		// bot's key would reach the logs and the channel's last error.
+		if ue, ok := errors.AsType[*url.Error](err); ok {
+			err = ue.Err
+		}
 		return fmt.Errorf("could not reach %s: %w", req.URL.Host, err)
 	}
 	defer resp.Body.Close()

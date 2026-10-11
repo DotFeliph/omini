@@ -17,7 +17,14 @@ What is emulated, as the self-hosted application answers it:
 - ``GET /api/s/<site>/...`` (session required, else 401 ``api.err.LoginRequired``;
   an unknown site → 400 ``api.err.NoSiteContext``): ``stat/device``,
   ``stat/device-basic``, ``stat/sta``, ``stat/health``, ``stat/sysinfo``,
-  ``rest/networkconf``, ``rest/wlanconf``; anything else → 404 ``api.err.NotFound``.
+  ``rest/networkconf``, ``rest/wlanconf``, ``rest/portconf``; anything else →
+  404 ``api.err.NotFound``.
+- ``PUT /api/s/<site>/rest/device/<_id>`` with ``{"port_overrides": [...]}``
+  (the plugin's port.enabled change): the controller keeps the overrides and
+  provisions the switch at once, so a port whose override has ``"forward":
+  "disabled"`` goes down (``enable: false`` in its port table). The account is
+  a Site Admin; with ``read_only`` in its secrets it is View Only and every write answers
+  403 ``api.err.NoPermission``.
 
 Every answer is ``{"meta": {"rc": "ok"}, "data": [...]}``.
 
@@ -41,7 +48,7 @@ from ..world import Assoc, PortState, Snapshot, h01, wsec
 APP_VERSION = "9.0.114"
 APP_BUILD = "atag_9.0.114_27321"
 SESSION_TTL = 7 * 86400  # "remember": true
-SITE = {"name": "default", "desc": "Default", "_id": "66b0e1a2c4f1d23a5e8f0001", "role": "readonly"}
+SITE = {"name": "default", "desc": "Default", "_id": "66b0e1a2c4f1d23a5e8f0001", "role": "admin"}
 
 # Design model → UniFi model code.
 MODEL_CODES = {
@@ -105,6 +112,12 @@ class UniFi(HttpService):
     def __init__(self, *a: Any, **kw: Any) -> None:
         super().__init__(*a, **kw)
         self.sessions: dict[str, float] = {}  # unifises → expiry (controller clock)
+        self.overrides: dict[str, list[dict[str, Any]]] = {}  # device → port_overrides, once written
+
+    @property
+    def read_only(self) -> bool:
+        """A View Only account (a test sets ``read_only`` in the secrets)."""
+        return bool(self.secrets.get("read_only"))
 
     # ------------------------------------------------------------------ HTTP
 
@@ -144,7 +157,9 @@ class UniFi(HttpService):
             self.sessions.pop(token, None)
             return err("api.err.LoginRequired", 401)
         if req.method != "GET":
-            return err("api.err.NoPermission", 403)  # a read-only account
+            if self.read_only:
+                return err("api.err.NoPermission", 403)
+            return self.write(req, path)
         if path == "/api/self":
             return ok(
                 [
@@ -153,7 +168,7 @@ class UniFi(HttpService):
                         "name": self.secrets.get("username"),
                         "email_alert_enabled": False,
                         "is_super": False,
-                        "site_role": "readonly",
+                        "site_role": "readonly" if self.read_only else "admin",
                         "last_site_name": "default",
                     }
                 ]
@@ -171,10 +186,70 @@ class UniFi(HttpService):
             "stat/sysinfo": self.sysinfo,
             "rest/networkconf": self.networkconf,
             "rest/wlanconf": self.wlanconf,
+            "rest/portconf": self.portconf,
         }.get(endpoint)
         if fn is None:
             return err("api.err.NotFound", 404)
         return ok(fn(snap))
+
+    def write(self, req: Request, path: str) -> Response:
+        """PUT rest/device/<_id>: a switch's port overrides. The controller
+        keeps them and provisions the switch: each port's override says
+        whether it forwards (``forward: "disabled"`` takes it down)."""
+        site, _, endpoint = path[len("/api/s/") :].partition("/")
+        if site != SITE["name"]:
+            return err("api.err.NoSiteContext", 400)
+        kind, _, _id = endpoint.rpartition("/")
+        design = self.ctx.world.d
+        n = next(
+            (
+                n
+                for n in design.nodes.values()
+                if n.api == self.name and n.kind == "switch" and oid("device", n.name) == _id
+            ),
+            None,
+        )
+        if req.method != "PUT" or kind != "rest/device" or n is None:
+            return err("api.err.NotFound", 404)
+        try:
+            body = req.json() or {}
+        except ValueError:
+            return err("api.err.Invalid", 400)
+        overrides = body.get("port_overrides") if isinstance(body, dict) else None
+        if not isinstance(overrides, list) or not all(
+            isinstance(o, dict) and isinstance(o.get("port_idx"), int) for o in overrides
+        ):
+            return err("api.err.Invalid", 400)
+        by_idx = {o["port_idx"]: o for o in overrides}
+        for p in n.ports.values():
+            if p.kind in ("ethernet", "sfp"):
+                p.admin_up = by_idx.get(p.index, {}).get("forward") != "disabled"
+        self.overrides[n.name] = overrides
+        return ok([{"_id": _id, "mac": n.mac, "port_overrides": overrides}])
+
+    def port_overrides(self, n: Node) -> list[dict[str, Any]]:
+        """As written, else what the design says (its disabled ports)."""
+        if n.name in self.overrides:
+            return self.overrides[n.name]
+        return [
+            {"port_idx": p.index, "forward": "disabled"}
+            for p in sorted(n.ports.values(), key=lambda x: x.index)
+            if p.kind in ("ethernet", "sfp") and not p.admin_up
+        ]
+
+    def portconf(self, snap: Snapshot) -> list[dict[str, Any]]:
+        """The built-in port profiles."""
+        return [
+            {
+                "_id": oid("portconf", name),
+                "name": name,
+                "forward": forward,
+                "attr_hidden_id": name,
+                "attr_no_delete": True,
+                "site_id": SITE["_id"],
+            }
+            for name, forward in (("All", "all"), ("Disabled", "disabled"))
+        ]
 
     def login(self, req: Request, snap: Snapshot) -> Response:
         try:
@@ -439,6 +514,7 @@ class UniFi(HttpService):
                 if e["port_idx"] == idx:
                     e["mac_table_count"] += 1
         d["port_table"] = table
+        d["port_overrides"] = self.port_overrides(n)
         d["total_max_power"] = 600
         d["poe_power_used"] = f"{poe_total:.2f}"
         d["has_fan"] = True

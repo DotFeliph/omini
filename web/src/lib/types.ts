@@ -12,6 +12,8 @@ export interface Interface {
   connector?: 'rj45' | 'sfp' | 'qsfp'
   mac?: string
   up?: boolean
+  /** false: disabled in the device's configuration (not just without a link). */
+  enabled?: boolean
   speed_mbps?: number
   duplex?: 'full' | 'half'
   /** As reported by the device, e.g. "1000baseT <full-duplex>". */
@@ -184,6 +186,10 @@ export interface TopoNode {
   traffic?: Record<string, Rate>
   /** The user's port descriptions, by port name. */
   port_labels?: Record<string, string>
+  /** Configuration changes its integration can apply. */
+  changes?: ChangeKind[]
+  /** Ports whose disabling would cut Omini or other gear off. */
+  protected?: Record<string, Protection>
   pinned?: boolean
   /** Hidden from the map by the user. */
   hidden?: boolean
@@ -491,4 +497,71 @@ export interface FlowsResponse {
     last_at: string
     version?: string
   }[]
+}
+
+/** A configuration change Omini can apply to a device. */
+export type ChangeKind = 'port.enabled'
+
+/**
+ * Why disabling a port is destructive: Omini reaches the device through it, or
+ * it is the way to the router and the internet (node: what it leads to).
+ */
+export interface Protection {
+  reason: 'omini' | 'internet'
+  node?: string
+}
+
+/** A change made from Omini, applied or refused (error). */
+export interface ConfigChange {
+  id: number
+  node_id: string
+  kind: ChangeKind
+  port?: string
+  before?: unknown
+  after: unknown
+  error?: string
+  at: string
+}
+
+/** An answer to the network scan's DHCPDISCOVER. */
+export interface DhcpOffer {
+  server_ip: string
+  server_mac?: string
+  offered_ip?: string
+  routers?: string[]
+  dns?: string[]
+  domain?: string
+  lease_s?: number
+  rtt_ms?: number
+  /** A router, or a device that serves DHCP: anything else is unknown. */
+  known: boolean
+  node_id?: string
+}
+
+/** One DNS test query. */
+export interface DnsQuery {
+  name: string
+  ok: boolean
+  rtt_ms?: number
+  answers?: string[]
+  /** "timeout", "refused", "not found" or the resolver's message. */
+  error?: string
+}
+
+/** The "DNS and DHCP" screen. */
+export interface ServicesView {
+  dhcp: {
+    checks: { interface: string; error?: string; offers: DhcpOffer[] }[]
+    pools: { node_id: string; network: string; used?: number; total?: number }[]
+    leases: {
+      node_id: string
+      client?: string
+      ip: string
+      mac: string
+      hostname?: string
+      expires_at?: string
+    }[]
+  }
+  dns: { servers: { server: string; node_id?: string; external?: DnsQuery; local?: DnsQuery }[] }
+  generated_at?: string
 }

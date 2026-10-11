@@ -11,7 +11,7 @@
 
 **Omini** is a self-hosted, open source network map for homelabs and small networks. Start it and, within a minute, it finds every device on your network, recognizes what each one is, and draws a **live map** of what is plugged into what: ports, link speeds, traffic, Wi-Fi clients, VMs and the apps running on them. Connect your firewall, switches, access points and hypervisors in a few clicks and the map gets sharper, with health data and alerts sent to Telegram, Discord, Slack, ntfy or e-mail.
 
-It runs as one small container (amd64 and arm64, a Raspberry Pi is enough), keeps everything in an embedded database, and **only reads**: Omini never changes the configuration of your devices.
+It runs as one small container (amd64 and arm64, a Raspberry Pi is enough) and keeps everything in an embedded database. Where an integration supports it, you can also **change your devices from the map**: disable a switch port with one click, with Omini guarding the links it needs to reach them.
 
 <p align="center">
   <img src="docs/assets/screens/map.png" alt="The network map: firewall, WANs, switches, access points, servers and clients, with port names, link speeds and live traffic" width="100%">
@@ -24,7 +24,8 @@ It runs as one small container (amd64 and arm64, a Raspberry Pi is enough), keep
 - **A topology map that builds itself.** LLDP neighbors, MAC tables, ARP, DHCP leases and Wi-Fi client lists are cross-referenced to work out each device's switch port or access point. Devices without an API (unmanaged switches, APs in bridge mode) are inferred from what the others see.
 - **Live traffic.** Every device shows its current download and upload, every link its port and speed. Click a link or port for its history (per minute for a day, hourly for a year). "Who talks to whom" comes from NetFlow, IPFIX or sFlow.
 - **A device panel.** CPU, memory, temperatures, disks, pending updates, a front view of the ports (RJ45 and SFP, colored by speed, with optics readings), VLANs, VPN peers, services, DHCP pools, the devices it talks to, and its presence timeline.
-- **Alerts that matter.** 27 rules: device offline, WAN gateway down, duplicate IP, links that fell to 100 Mbps or half duplex, flapping ports, low SFP signal, full disks, hot CPUs, insecure services, full DHCP pools, a burst of new devices, and more. Each comes with a hint on what to do.
+- **Alerts that matter.** 32 rules: device offline, WAN gateway down, duplicate IP, links that fell to 100 Mbps or half duplex, flapping ports, low SFP signal, full disks, hot CPUs, insecure services, full DHCP pools, a burst of new devices, and more. Each comes with a hint on what to do.
+- **DNS & DHCP.** A screen with the DHCP servers, pools and leases and each DNS server's answers, checked every round: no DHCP answer, a rogue DHCP server, a DNS server down, slow or not resolving local names are alerts.
 - **Notifications.** Telegram, e-mail, generic webhooks (signed with HMAC), Slack, Discord and ntfy, grouped per device and never repeated while an alert flaps.
 - **Your map, your way.** Left-to-right or top-down layout, named and colored areas, fold any node's children into a bubble, VLAN and subnet filter, hide devices. Export to PNG, SVG, draw.io or JSON.
 - **Integrations and a plugin store.** One-click plugins for OPNsense, pfSense, MikroTik, UniFi, Omada, OpenWrt, Proxmox (clusters included), Mercusys Halo and Horaco switches. Any GitHub repository can be installed too, and plugins are short Python scripts.
@@ -123,14 +124,16 @@ The core is written in **Go**: discovery, SNMP, topology, traffic and the API in
 
 ## Security
 
-- **Read-only**: no integration sends commands that change a device. Give each integration a read-only account ([Integrations](docs/integrations.md) shows how).
+- **Changes are guarded**: each one is confirmed, applied, checked and only then saved on the device, and kept in the device's history. A change that would cut Omini off a device, or cut off other network gear, is blocked unless you allow destructive changes in Settings. An integration that only reads can use a read-only account ([Integrations](docs/integrations.md) shows how).
 - Login is required. The admin user is created on the first visit.
 - Device credentials are encrypted at rest. Secrets are never shown again or written to logs.
 - Plugins run code on your server and receive the credentials you give them, so install only plugins you trust.
 
 ## Roadmap
 
-- Write actions (disable a port, change a VLAN) behind explicit permissions
+- VLANs for the whole network managed in Omini (switches first, then the router: subnet, DHCP and firewall)
+- A "DNS and DHCP" screen with checks every round
+- More configuration changes, one at a time: a port's name, reboot, configuration backups with history
 - More plugins and SNMP profiles, reviewed on real hardware
 - More languages
 

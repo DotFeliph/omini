@@ -61,6 +61,32 @@ class DhcpLease(BaseModel):
     expires_at: AwareDatetime | None = None
 
 
+class Change(BaseModel):
+    """
+    One configuration change to apply to a device.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    device: str
+    """
+    Key of the device, as the plugin reported it.
+    """
+    kind: Literal["port.enabled", "port.vlans"]
+    """
+    A configuration change Omini knows. port.enabled: enable (true) or disable (false) a port. port.vlans: the port's VLANs, a PortVlans (access: untagged only; trunk: untagged as the native VLAN, or none, and the tagged list), only VLANs the device has.
+    """
+    port: str | None = None
+    """
+    Interface name, for the changes of a port.
+    """
+    value: Any
+    """
+    The new value: a boolean for port.enabled, a PortVlans object for port.vlans.
+    """
+
+
 class OpenPort(RootModel[int]):
     root: Annotated[int, Field(ge=1, le=65535)]
 
@@ -324,6 +350,54 @@ class FirewallStates(BaseModel):
     limit: Annotated[int | None, Field(ge=0)] = None
 
 
+class DhcpOffer(BaseModel):
+    """
+    An answer to the DHCPDISCOVER.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    server_ip: str
+    """
+    The server identifier (option 54), else the sender.
+    """
+    server_mac: Annotated[str | None, Field(pattern="^[0-9a-f]{2}(:[0-9a-f]{2}){5}$")] = None
+    """
+    Lowercase, colon separated: aa:bb:cc:dd:ee:ff.
+    """
+    offered_ip: str | None = None
+    routers: list[str] | None = None
+    dns: list[str] | None = None
+    """
+    DNS servers it hands out (option 6).
+    """
+    domain: str | None = None
+    lease_s: Annotated[int | None, Field(ge=0)] = None
+    rtt_ms: Annotated[float | None, Field(ge=0.0)] = None
+
+
+class DnsQuery(BaseModel):
+    """
+    One test query.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    name: str
+    ok: bool
+    """
+    The name resolved.
+    """
+    rtt_ms: Annotated[float | None, Field(ge=0.0)] = None
+    answers: list[str] | None = None
+    error: str | None = None
+    """
+    "timeout", "refused", "not found" or what the resolver said.
+    """
+
+
 class Interface(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -364,6 +438,10 @@ class Interface(BaseModel):
     up: bool | None = None
     """
     Operational status.
+    """
+    enabled: bool | None = None
+    """
+    Administrative status: false when the port is disabled in the device's configuration.
     """
     speed_mbps: Annotated[int | None, Field(ge=0)] = None
     duplex: Literal["full", "half"] | None = None
@@ -527,6 +605,10 @@ class PluginManifest(BaseModel):
     author: str | None = None
     homepage: str | None = None
     fields: list[FormField] | None = None
+    changes: list[Literal["port.enabled", "port.vlans"]] | None = None
+    """
+    Configuration changes the plugin can apply (action apply).
+    """
 
 
 class PluginRequest(BaseModel):
@@ -538,7 +620,7 @@ class PluginRequest(BaseModel):
         extra="forbid",
     )
     protocol: Annotated[int, Field(ge=1)]
-    action: Literal["collect", "test"]
+    action: Literal["collect", "test", "apply"]
     config: dict[str, Any]
     """
     Values of the manifest fields, keyed by field key.
@@ -546,6 +628,10 @@ class PluginRequest(BaseModel):
     state_dir: str | None = None
     """
     Writable directory private to this integration, kept between runs (e.g. to cache sessions).
+    """
+    change: Change | None = None
+    """
+    The change to apply (action apply only).
     """
 
 
@@ -602,6 +688,35 @@ class Host(BaseModel):
     Web interfaces found on the host, one per port.
     """
     dhcp: DhcpFingerprint | None = None
+
+
+class DhcpCheck(BaseModel):
+    """
+    A DHCPDISCOVER sent on one interface and the offers that came back (no address is taken).
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    interface: str
+    offers: list[DhcpOffer] | None = None
+    error: str | None = None
+    """
+    Why the check could not run (then nothing is known about the servers).
+    """
+
+
+class DnsCheck(BaseModel):
+    """
+    A DNS server and the test queries it answered.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    server: str
+    external: DnsQuery | None = None
+    local: DnsQuery | None = None
 
 
 class Device(BaseModel):
@@ -695,6 +810,14 @@ class Device(BaseModel):
     dhcp_pools: list[DhcpPool] | None = None
     """
     Usage of each DHCP range.
+    """
+    dhcp_checks: list[DhcpCheck] | None = None
+    """
+    DHCP checks on this network (network scan): what answered a DHCPDISCOVER.
+    """
+    dns_checks: list[DnsCheck] | None = None
+    """
+    DNS checks of the servers of this network (network scan).
     """
     firewall_states: FirewallStates | None = None
 

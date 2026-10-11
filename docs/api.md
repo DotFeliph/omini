@@ -77,6 +77,9 @@ curl -b omini.cookie -X POST -H 'X-Omini-Request: 1' http://omini.lan:8080/api/r
 | `PATCH` | `/api/areas/{id}` | Change any of `name`, `color`, `x`, `y`, `width`, `height`, `members`, `hidden` |
 | `DELETE` | `/api/areas/{id}` | Delete an area (its devices stay) |
 | `PUT` | `/api/nodes/{id}/ports/{port}` | Body `{label}`: name a device's port; `""` restores the device's own description |
+| `POST` | `/api/nodes/{id}/changes` | Body `{kind, port, value, confirm}`: apply a [configuration change](decisions.md#configuration-changes) (`kind` one of the node's `changes`, e.g. `{"kind":"port.enabled","port":"Port 5","value":false}`). Returns the change as kept in the history. 409 `{error:"destructive", reason, node, allowed}` for a destructive one: blocked (`allowed` false) or to be confirmed again with `confirm: true`; 400 for an unknown port or a wrong value; 404 when the device cannot apply it; 502 `{error, change}` when the device refused it |
+| `GET` | `/api/nodes/{id}/changes` | The latest changes made to the node, newest first: `[{id, kind, port, before, after, error, at}]` (kept a year) |
+| `GET`, `PUT` | `/api/change-settings` | `{allow_destructive}`: whether destructive changes are allowed (asked twice) or blocked |
 | `GET` | `/api/nodes/{id}/web` | Web interfaces found on the node's IP: `[{url, port, title}]`. Only nodes on the map are probed; cached 10 minutes |
 | `POST` | `/api/nodes/{id}/scan` | Scan the node with the nmap integration (up to 6 minutes) and rebuild the map. Returns the host found. 409 without an enabled nmap integration, 404 when the node has no address |
 
@@ -86,13 +89,22 @@ curl -b omini.cookie -X POST -H 'X-Omini-Request: 1' http://omini.lan:8080/api/r
 `band`, `signal_dbm`, `link_mbps`, `flow`), `traffic` (current rate per
 interface: `rx_bps`, `tx_bps`), the identification (`type`, `os`, `brand`,
 `product`, `reasons`), scan results (`open_ports`, `services`, `titles`,
-`web`, `banners`), user fields (`pinned`, `hidden`, `icon`, `port_labels`),
+`web`, `banners`), user fields (`pinned`, `hidden`, `icon`, `port_labels`), for devices whose
+integration applies changes `changes` (their kinds) and `protected` (port →
+`{reason, node}`: `omini` or `internet`, the ports whose disabling is
+destructive),
 `last_seen` for offline nodes, and for managed devices `device`: everything
 the integration reported, in the [plugin data model](plugins.md#what-to-return).
 
 **Edges** have `id`, `source` (the upstream end), `target`, `source_port`,
 `target_port`, `kind` (`lldp`, `fdb`, `wifi`, `inferred`, `vpn`) and
 `speed_mbps`.
+
+## DNS and DHCP
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/dns-dhcp` | The **DNS & DHCP** screen: `dhcp` (`checks`: per interface, the `offers` with `known` and the server's `node_id`; `pools` and `leases` the routers report, with the `node_id` of the server and the `client` on the map) and `dns` (`servers`: each with its `external` and `local` test queries and its `node_id`), and `generated_at` |
 
 ## Inventory
 

@@ -57,6 +57,7 @@ func TestEveryRuleHasTexts(t *testing.T) {
 			"saturated_link", "unmanaged_switch", "unknown_neighbor", "new_device",
 			"fast_ethernet", "integration_available", "link_flapping", "half_duplex", "device_rebooted", "sfp_low_rx",
 			"dhcp_pool_full", "firewall_states_full", "insecure_service", "new_devices_burst", "discovery_limited",
+			"dhcp_no_offer", "dhcp_rogue", "dns_down", "dns_slow", "dns_local",
 		} {
 			if _, ok := texts[locale][rule]; !ok {
 				t.Errorf("%s: no text for %s", locale, rule)
@@ -112,6 +113,17 @@ func TestWebhookErrorStatus(t *testing.T) {
 	defer srv.Close()
 	err := SendWith(context.Background(), "webhook", integration.Config{"url": srv.URL}, nil, Message{})
 	if err == nil || !strings.Contains(err.Error(), "403") || !strings.Contains(err.Error(), "invalid token") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestUnreachableWebhookHidesItsURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	addr := srv.URL
+	srv.Close() // nothing listens there now
+	err := SendWith(context.Background(), "webhook",
+		integration.Config{"url": addr + "/api/webhooks/123/s3cr3t-token"}, nil, Message{})
+	if err == nil || strings.Contains(err.Error(), "s3cr3t") || !strings.Contains(err.Error(), "could not reach") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -271,6 +283,43 @@ func TestDispatcher(t *testing.T) {
 	got, _ := st.GetNotifier(ctx, n.ID)
 	if got.LastSentAt == nil || got.LastError != "" {
 		t.Fatalf("delivery not recorded: %+v", got)
+	}
+}
+
+// A restart (an event) is notified when it happens, not when its alert ends.
+func TestEventsAreNotNotifiedAsResolved(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "omini.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	box, _ := secret.New(make([]byte, 32))
+	var (
+		mu   sync.Mutex
+		sent int
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		mu.Lock()
+		sent++
+		mu.Unlock()
+	}))
+	defer srv.Close()
+	kind, _ := KindOf("webhook")
+	sealed, _ := integration.SealSecrets(box, kind.Fields, integration.Config{"url": srv.URL})
+	_, _ = st.CreateNotifier(ctx, store.Notifier{Type: "webhook", Config: sealed, MinSeverity: "info", NotifyResolved: true, Enabled: true})
+	now := time.Unix(1_790_000_000, 0)
+	d := &Dispatcher{Store: st, Box: box, Now: func() time.Time { return now }}
+	reboot := alert("device_rebooted", "warning", map[string]any{"node": "sw"})
+	d.Handle([]store.AlertChange{{Alert: reboot, Opened: true}})
+	d.Wait()
+	now = now.Add(2 * time.Hour)
+	d.Handle([]store.AlertChange{{Alert: reboot}})
+	d.Wait()
+	mu.Lock()
+	defer mu.Unlock()
+	if sent != 1 {
+		t.Fatalf("sent %d messages, want the restart only", sent)
 	}
 }
 

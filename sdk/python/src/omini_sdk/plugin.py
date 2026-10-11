@@ -1,6 +1,6 @@
 """Plugin runtime: reads the core's request from stdin and answers on stdout.
 
-A plugin registers two functions and calls ``plugin.run()``::
+A plugin registers its functions and calls ``plugin.run()``::
 
     from omini_sdk import Device, PluginError, plugin
 
@@ -11,6 +11,11 @@ A plugin registers two functions and calls ``plugin.run()``::
     @plugin.test
     def test(cfg):
         return "Connected"
+
+    @plugin.apply  # optional: only with ``changes`` in plugin.yaml
+    def apply(cfg, change):
+        ...  # apply, check, save
+        return collect(cfg)
 
     if __name__ == "__main__":
         plugin.run()
@@ -32,7 +37,7 @@ from typing import Any, TextIO
 
 from pydantic import ValidationError
 
-from omini_sdk.models import Device, PluginRequest
+from omini_sdk.models import Change, Device, PluginRequest
 
 PROTOCOLS = (1,)
 
@@ -69,12 +74,19 @@ class Config(dict[str, Any]):
 
 CollectFn = Callable[[Config], Iterable[Device | dict[str, Any]]]
 TestFn = Callable[[Config], str]
+ApplyFn = Callable[[Config, Change], Iterable[Device | dict[str, Any]]]
+
+
+def _devices(items: Iterable[Device | dict[str, Any]]) -> dict[str, Any]:
+    devices = [d if isinstance(d, Device) else Device.model_validate(d) for d in items]
+    return {"devices": [d.model_dump(mode="json", exclude_none=True) for d in devices]}
 
 
 class Plugin:
     def __init__(self) -> None:
         self._collect: CollectFn | None = None
         self._test: TestFn | None = None
+        self._apply: ApplyFn | None = None
 
     def collect(self, fn: CollectFn) -> CollectFn:
         """Registers the function that returns the devices."""
@@ -84,6 +96,14 @@ class Plugin:
     def test(self, fn: TestFn) -> TestFn:
         """Registers the function that checks the connection and returns a short message."""
         self._test = fn
+        return fn
+
+    def apply(self, fn: ApplyFn) -> ApplyFn:
+        """Registers the function that applies a change (one of the manifest's
+        ``changes``): apply it, read the device again to check it took effect,
+        save it to the startup configuration, and return the device as read
+        after the change."""
+        self._apply = fn
         return fn
 
     def handle(self, raw: str) -> tuple[dict[str, Any], int]:
@@ -102,13 +122,13 @@ class Plugin:
             if action == "collect":
                 if self._collect is None:
                     raise PluginError("this plugin has no @plugin.collect function")
-                devices = [
-                    d if isinstance(d, Device) else Device.model_validate(d)
-                    for d in self._collect(cfg)
-                ]
-                return {
-                    "devices": [d.model_dump(mode="json", exclude_none=True) for d in devices]
-                }, 0
+                return _devices(self._collect(cfg)), 0
+            if action == "apply":
+                if self._apply is None:
+                    raise PluginError("this plugin has no @plugin.apply function")
+                if req.change is None:
+                    raise PluginError("no change to apply")
+                return _devices(self._apply(cfg, req.change)), 0
             if self._test is None:
                 raise PluginError("this plugin has no @plugin.test function")
             return {"message": str(self._test(cfg))}, 0

@@ -132,14 +132,20 @@ and an hourly average and peak for a year.
 Click a node to open its panel on the side, without leaving the map. Drag its
 edge to resize it.
 
-**Overview.** Name (click to rename; the name is kept by Omini, never written
+The panel shows little at first: the name, status, type and address, its open
+**Alerts**, its **Ports** and its **Connected devices** (click one to open
+it). Everything else folds to its title and a short summary (**Details** shows
+the version and uptime, **Changes** how many there were); click a title to
+open it. The sections you open stay open, for every device (per browser).
+
+**Details.** Name (click to rename; the name is kept by Omini, never written
 to the device), type, IP and MAC addresses, vendor, model, serial, version,
 uptime, the integration that reads it, **Connected to** (its parent and port),
 **Runs on** (for a router or firewall running as a VM: the host it runs on,
 which is not linked on the map), Wi-Fi network, band, signal and link rate for
 Wi-Fi clients, and **Last seen**.
 
-**Health.**
+Details also hold the health:
 
 - CPU and memory as bars: green under 60 %, yellow under 85 %, red above.
 - Tiles for pending updates (yellow when an update is waiting; "Not checked"
@@ -158,11 +164,25 @@ port** to open its card:
 - the SFP module, when reported: vendor, part, type, temperature, voltage,
   bias, Tx and Rx power (Rx in red below the module's alarm threshold, or
   below -20 dBm when it has none),
-- **Name this port** ("Uplink to the rack"): kept by Omini, shown instead of
-  the device's own description; empty restores it,
-- the device connected to it, and the port's traffic chart.
+- what is connected to it, and the port's traffic chart,
+- the pencil next to its name renames it ("Uplink to the rack"): kept by
+  Omini, shown instead of the device's own description; empty restores it,
+- **Disable port** / **Enable port**, when the device's integration can change
+  it: one short confirmation, then Omini applies the change, checks it took
+  effect and saves it on the device; the map shows it at once. A disabled port
+  is struck through and shows "Disabled" (a port without a link shows "No
+  link"); its client stays there, offline.
 
-**Extras**, when an integration reports them: services (stopped ones first),
+Taking a device off the network is an ordinary change. Disabling a port is
+**destructive** only when it hurts the network as a whole: when Omini reaches
+the device through it, or when it is the way to the router and the internet
+(the device's uplink, or the port of the router itself). It is blocked, with
+the reason, unless **Settings → Changes → Allow destructive changes** is on,
+and then it asks twice. Omini finds where it runs by itself (the device with
+one of its machine's MACs or addresses); in a container with a network of its
+own it cannot, and then only the way to the internet is protected.
+
+**Extras**, folded, when an integration reports them: services (stopped ones first),
 VPN peers (WireGuard, OpenVPN, IPsec: connected, endpoint, last handshake,
 traffic), DHCP pool usage and firewall states (yellow from 75 %, red from
 90 %), and VLANs.
@@ -176,10 +196,11 @@ traffic), DHCP pool usage and firewall states (yellow from 75 %, red from
   is enabled.
 - **Identification**: type, OS, brand and product with the evidence for each,
   and the **Device type** and **Icon** you can override.
-- **Connected devices**: its clients.
 - **Talks to (last hour)**: its top conversations, with
   [Traffic flows](discovery.md#traffic-flows) enabled.
-- Its open **Alerts** and its last **Activity** (joined and left the network).
+- Its last **Activity** (joined and left the network).
+- **Changes**: the changes made from Omini (kept a year), the refused ones
+  with the device's error.
 - **Pin** (a pinned device is never folded into a bubble), **Hide** and
   **Delete**.
 

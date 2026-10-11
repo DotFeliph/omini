@@ -41,6 +41,7 @@ def generate() -> dict[str, Any]:
             out[name] = {"username": "admin", "password": tok(12)}
     out["snmp"] = {
         "community": "acme-ro-" + secrets.token_hex(4),
+        "write_community": "acme-rw-" + secrets.token_hex(4),
         "v3": {"user": "omini", "auth": "sha256", "auth_pass": tok(16), "priv": "aes", "priv_pass": tok(16)},
     }
     return out
@@ -58,11 +59,17 @@ def load(path: Path) -> dict[str, Any]:
     return data
 
 
+def write_community(sec: dict[str, Any]) -> str:
+    """Acme's SNMP write community (older secrets files have none: derived from the read one)."""
+    return sec["snmp"].get("write_community") or "acme-rw-" + sec["snmp"]["community"][8:]
+
+
 def snmp_credential(name: str, sec: dict[str, Any]) -> dict[str, Any]:
     """What an SNMP agent accepts: its v2c community and, when enabled, the v3 user."""
     spec = acme.APIS[name]
     return {
         "community": spec.get("community") or sec["snmp"]["community"],
+        "write_community": write_community(sec),
         "v3": sec["snmp"]["v3"] if spec.get("v3") else None,
     }
 
@@ -132,6 +139,7 @@ def scan_config(sec: dict[str, Any]) -> dict[str, Any]:
         "learned_subnets": True,
         "snmp": True,
         "snmp_communities": f"{sec['snmp']['community']}, public",
+        "snmp_write_community": write_community(sec),
         "snmp_v3_user": v3["user"],
         "snmp_v3_auth": v3["auth"],
         "snmp_v3_auth_pass": v3["auth_pass"],

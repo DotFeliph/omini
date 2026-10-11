@@ -120,7 +120,7 @@ def main() -> int:
         added += 1
     print(
         f"devnet: {len(want)} integrations ({added} added now). "
-        f"Sign in with the credentials in {data / 'devnet-admin.json'}.",
+        f"No login on this machine (with DEVNET_BIND elsewhere: {data / 'devnet-admin.json'}).",
         flush=True,
     )
     return 0

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/riccardoalv/omini/internal/insights"
 	"github.com/riccardoalv/omini/internal/integration"
 	"github.com/riccardoalv/omini/internal/secret"
 	"github.com/riccardoalv/omini/internal/store"
@@ -64,8 +65,9 @@ func (d *Dispatcher) Handle(changes []store.AlertChange) {
 			d.notified[c.Alert.Key] = now
 			continue
 		}
-		// Resolved: unless it is flapping (opened moments ago) or was dismissed.
-		if !recent && !c.Alert.Dismissed {
+		// Resolved: unless it is flapping (opened moments ago), was dismissed, or
+		// is an event (a restart is not "solved", its alert just ends).
+		if !recent && !c.Alert.Dismissed && !insights.Events[c.Alert.Rule] {
 			send = append(send, c)
 		}
 	}

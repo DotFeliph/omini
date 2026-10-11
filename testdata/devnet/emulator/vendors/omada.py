@@ -17,6 +17,9 @@ What is emulated, as the controller answers it:
   neighbors, AP info / ports / radios, clients. Every answer is
   ``{"errorCode", "msg", "result"}``; lists are paged (``page`` and
   ``pageSize`` ≤ 1000 required, ``totalRows``).
+- ``PUT .../sites/{siteId}/switches/{switchMac}/ports/{port}/status`` with
+  ``{"status": 0 | 1}`` (Set port status for given port): turns the switch
+  port off or on; the statistics show it as ``disable``.
 
 Error codes: -44106 wrong client id / secret, -44111 bad grant type, -44112
 expired token, -44113 invalid token, -1001 invalid parameters, -1600 unknown
@@ -143,6 +146,8 @@ class Omada(HttpService):
                     "The access token has expired. Please re-initiate the refreshToken process "
                     "to obtain the access token.",
                 )
+            if req.method == "PUT":
+                return self.write(rest[1:], req, snap)
             if req.method != "GET":
                 return err(-1, "Request method not supported.", 405)
             return self.api(rest[1:], req, snap)
@@ -240,6 +245,30 @@ class Omada(HttpService):
         if len(p) >= 2 and p[0] == "gateways":
             return err(-39701, "The gateway does not exist.")
         return err(-1600, "Unsupported request path.", 404)
+
+    def write(self, parts: list[str], req: Request, snap: Snapshot) -> Response:
+        """The one write emulated: Set port status for given port."""
+        if not (
+            len(parts) == 7 and parts[0] == "sites" and parts[2] == "switches" and parts[4:7:2] == ["ports", "status"]
+        ):
+            return err(-1600, "Unsupported request path.", 404)
+        if parts[1] != self.site_id:
+            return err(-1005, "Operation forbidden.")
+        sw = self.find(parts[3], "switch")
+        gone = self.online(sw, snap)
+        if gone:
+            return gone
+        try:
+            body = req.json() or {}
+        except ValueError:
+            return err(-1001, "Invalid request parameters.")
+        name = next(
+            (n for n, p in sw.ports.items() if p.kind in ("ethernet", "sfp") and str(p.index) == parts[5]), None
+        )
+        if name is None or not isinstance(body, dict) or body.get("status") not in (0, 1):
+            return err(-1001, "Invalid request parameters.")
+        self.ctx.world.d.node(sw.name).ports[name].admin_up = body["status"] == 1
+        return Response.json({"errorCode": 0, "msg": "Success."})
 
     def online(self, n: Any, snap: Snapshot) -> Response | None:
         if n is None:

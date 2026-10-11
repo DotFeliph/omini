@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/riccardoalv/omini/internal/integration"
+	"github.com/riccardoalv/omini/internal/model"
 )
 
 const manifest = `id: fake
@@ -399,5 +400,38 @@ func TestRemoteIndex(t *testing.T) {
 	(&Index{Cache: cache}).Load()
 	if e, ok := CatalogFor("https://github.com/someone/omini-plugin-new"); !ok || e.ID != "newone" {
 		t.Fatal("cached index not loaded")
+	}
+}
+
+func TestApplySendsTheChange(t *testing.T) {
+	dev := t.TempDir()
+	man := manifest + "changes: [port.enabled]\n"
+	// Echoes the change back in the device, so the test sees what was sent.
+	const apply = `req=$(cat)
+case "$req" in
+  *'"action":"apply"'*'"change":{"device":"sw","kind":"port.enabled","port":"Port 5","value":false}'*)
+    echo '{"devices":[{"key":"sw","name":"sw","interfaces":[{"name":"Port 5","enabled":false}]}]}' ;;
+  *) echo '{"error":"unexpected request"}'; exit 1 ;;
+esac
+`
+	_ = os.WriteFile(filepath.Join(dev, "plugin.yaml"), []byte(man), 0o644)
+	_ = os.WriteFile(filepath.Join(dev, "main.sh"), []byte(apply), 0o644)
+	m := &Manager{Dir: t.TempDir(), DevDirs: []string{dev}, Interpreter: "/bin/sh"}
+	list, errs := m.Load()
+	if len(errs) != 0 || len(list) != 1 {
+		t.Fatalf("load: %v", errs)
+	}
+	in := m.Integration(list[0])
+	if c := in.Info().Changes; len(c) != 1 || c[0] != model.ChangeKindPortEnabled {
+		t.Fatalf("changes: %v", c)
+	}
+	applier := in.(integration.Applier)
+	devices, err := applier.Apply(context.Background(), integration.Config{"host": "x"},
+		model.Change{Device: "sw", Kind: model.ChangeKindPortEnabled, Port: model.Ptr("Port 5"), Value: false})
+	if err != nil || len(devices) != 1 || *devices[0].Interfaces[0].Enabled {
+		t.Fatalf("apply: %+v %v", devices, err)
+	}
+	if _, err := applier.Apply(context.Background(), integration.Config{}, model.Change{Kind: "port.vlan"}); err == nil {
+		t.Fatal("a change the manifest does not declare must be refused")
 	}
 }

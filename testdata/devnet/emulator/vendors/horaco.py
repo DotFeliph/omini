@@ -41,6 +41,38 @@ SPEED_CODE = {10: 0, 100: 1, 1000: 2, 500: 3, 10000: 4, 2500: 5, 5000: 6}
 
 REDIRECT = '<script type="text/javascript">window.top.location.replace("/login.cgi");</script>'
 
+# Negotiation speeds of the Port Setting forms (option value, text): the RJ45
+# ports' form, and the SFP+ port's form.
+PORT_SPEEDS = (("10", "Auto"), ("0", "10M"), ("1", "100M"), ("2", "1000M"), ("5", "2500M"))
+SFP_SPEEDS = (("10", "Auto"), ("1", "100M"), ("2", "1000M"), ("5", "2500M"), ("4", "10G"))
+
+
+def port_form(name: str, prefix: str, ports: list[tuple[int, str]], speeds: tuple[tuple[str, str], ...]) -> str:
+    """One Port Setting form, as the firmware draws it: a checkbox per port
+    (port<index>, labelled with its name; options left unclosed)."""
+    boxes = "".join(
+        f'<input type="checkbox" id=port{i} name=port{i} class="{prefix}chkp" onclick={prefix}chkClick(this)>'
+        f"<label id=lport{i} for=port{i}>{label}</label><br>"
+        for i, label in ports
+    )
+    duplex = '<option value="2">Auto\n <option value="1">Full Duplex\n' + (
+        "" if prefix else ' <option value="0">Half Duplex\n'
+    )
+    speed = "".join(f'<option value="{v}">{t}\n ' for v, t in speeds)
+    return (
+        f'<form method="post" name="{name}" action="port.cgi"><div class="tblcfgdiv"><table><tr><th style="width:150px;height:30px">Port</th>'
+        '<th style="width:180px;">State</th><th style="width:180px;">Duplex Mode</th><th style="width:180px;">Negotiation Speed</th>'
+        '<th style="width:180px;">Flow Control</th></tr><tr><td style="width:138px;text-align:left"><div class="port-container">'
+        f'<input id="{prefix}ports" readonly value=Select Port><div class="arrow-icon"></div><div class="option-container">'
+        f'<input type="checkbox" id="{prefix}all" name="{prefix}all" class="{prefix}allchkp"><label for="{prefix}all">Select All</label><br>'
+        f"{boxes}</div></td>"
+        '<td><select name="state"><option value="1">Enable\n <option value="0">Disable\n </select></td>'
+        f'<td><select name="duplex" id="{prefix}duplex">{duplex} </select></td>'
+        f'<td><select name="speed" id="{prefix}speed">{speed}</select></td>'
+        '<td><select name="flowctrl"><option value="0">Off\n <option value="1">On\n </select></td></tr></table>'
+        '<br style="line-height:50%"><input type="button" value="Apply"><input type="hidden" name="cmd" value="port"></div></form>'
+    )
+
 
 def credential(username: str, password: str) -> str:
     return hashlib.md5((username + password).encode()).hexdigest()
@@ -205,6 +237,7 @@ class Horaco(HttpService):
         self.per_page = DEFAULT_PER_PAGE
         self.mac_page = 1  # the MAC table's current page (the firmware keeps it between requests)
         self.mac_search: str | None = None
+        self.saves = 0  # Save Configuration posts
 
     # ------------------------------------------------------------------ helpers
 
@@ -250,7 +283,13 @@ class Horaco(HttpService):
             return Response.text("body{font-family:Arial;font-size:12px}", ctype="text/css")
         if path.endswith(".js"):
             return Response.text("", ctype="application/javascript")
-        pages = {"/info.cgi": self.info, "/port.cgi": self.port, "/panel.cgi": self.panel, "/mac.cgi": self.mac}
+        pages = {
+            "/info.cgi": self.info,
+            "/port.cgi": self.port,
+            "/save.cgi": self.save,
+            "/panel.cgi": self.panel,
+            "/mac.cgi": self.mac,
+        }
         fn = pages.get(path)
         if fn is None:
             return Response.text(NOT_FOUND, 404, "text/html")
@@ -349,40 +388,32 @@ class Horaco(HttpService):
     def port(self, req: Request, snap: Snapshot) -> str:
         if req.arg("page") == "stats":
             return self.stats(snap)
-        n = snap.node(self.node)
+        n = self.ctx.world.d.node(self.node)
+        if req.method == "POST" and req.form().get("cmd") == "port":
+            # Port Setting: the checked ports take the posted state (duplex,
+            # speed and flow control stay Auto/Auto/Off here, as on every port).
+            form = req.form()
+            for i, name in enumerate(self.ports()):
+                if form.get(f"port{i}") == "on" and form.get("state") in ("0", "1"):
+                    n.ports[name].admin_up = form["state"] == "1"
+        rj45 = [(i, name) for i, name in enumerate(self.ports()) if n.ports[name].connector != "sfp"]
+        sfp = [(i, name) for i, name in enumerate(self.ports()) if n.ports[name].connector == "sfp"]
         rows = []
         for name in self.ports():
-            p = n.ports[name]
             ps = snap.port(self.node, name)
-            actual = f"{speed_text(ps.speed)} Full" if ps.up else "Link Down"
+            up = ps.up and n.ports[name].admin_up
             rows.append(
-                f"\t<tr>\n\t\t<td>{name}</td>\n\t\t<td>{'Enable' if p.admin_up else 'Disable'}</td>\n"
-                f"\t\t<td>Auto</td>\n\t\t<td>{actual}</td>\n\t\t<td>Off</td>\n\t\t<td>Off</td>\n\t</tr>"
+                f"<tr><td>{name}</td><td>{'Enable' if n.ports[name].admin_up else 'Disable'}</td>"
+                f"<td>Auto</td><td>{'Full Duplex' if up else 'Half Duplex'}</td>"
+                f"<td>Auto</td><td>{speed_text(ps.speed) if up else '10M'}</td><td>Off</td><td>Off</td></tr>"
             )
-        return f"""<html>
-
-<head>
-<title>Port Setting</title>
-<link rel="stylesheet" type="text/css" href="/style.css">
-</head>
-
-<body>
-<h3>Port Setting</h3>
-<div class="tblcfgdiv"><table>
-	<tr>
-		<th style="width:100px;">Port</th>
-		<th style="width:118px;">State</th>
-		<th style="width:150px;">Config Mode</th>
-		<th style="width:150px;">Actual Mode</th>
-		<th style="width:128px;">Config FC</th>
-		<th style="width:128px;">Actual FC</th>
-	</tr>
-{chr(10).join(rows)}
-</table>
-</div>
-</body>
-</html>
+        return f"""<html><head><title>Port Setting</title><link rel="stylesheet" type="text/css" href="/style.css"></head><body><h3>Port Setting</h3>{port_form("portcfg", "", rj45, PORT_SPEEDS)}{port_form("extportcfg", "ext", sfp, SFP_SPEEDS) if sfp else ""}<hr><h3>Port List</h3><br><div class="tblcfgdiv"><table><tr><th rowspan="2" style="width:90px;height:80px">Port</th><th rowspan="2" width="90">State</th><th colspan="2" style="width:280px;height:40px">Duplex Mode</th><th colspan="2" width="280">Negotiation Speed</th><th colspan="2" width="130">Flow Control</th></tr><tr><th width="140">Config Attribute</th><th width="140">Actual Status</th><th width="140">Config Attribute</th><th width="140">Actual Status</th><th width="140">Config Attribute</th><th width="140">Actual Status</th></tr>{"".join(rows)}</table></div></body></html>
 """
+
+    def save(self, req: Request, snap: Snapshot) -> str:
+        if req.method == "POST" and req.form().get("cmd") == "save":
+            self.saves += 1
+        return '<html><head><title>Save Configuration</title></head><body><form method="post" name="save" action="/save.cgi"><input type="submit" value="Save"><input type="hidden" name="cmd" value="save"></form></body></html>'
 
     def stats(self, snap: Snapshot) -> str:
         n = snap.node(self.node)

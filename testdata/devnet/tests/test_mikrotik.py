@@ -278,3 +278,23 @@ def test_rest_api_shapes(world: World) -> None:
         assert e.value.code == 401
         assert json.loads(e.value.read()) == {"error": 401, "message": "Unauthorized"}
     assert acme.APIS[STOR]["node"] == "sw-stor-01"
+
+
+def test_disable_and_enable_a_port() -> None:
+    with Emulator(at=TUESDAY_10_30, apis=[BR], world=World()) as emu:
+        key = device(emu.collect(BR))["key"]
+        change = {"device": key, "kind": "port.enabled", "port": "sfp-sfpplus1", "value": False}
+        sfp = iface(device(emu.collect(BR, "apply", change=change)), "sfp-sfpplus1")
+        assert (sfp["enabled"], sfp["up"]) == (False, False)  # br-sw01 behind it drops
+        assert iface(device(emu.collect(BR)), "sfp-sfpplus1")["enabled"] is False
+        assert rest(emu, BR, "/rest/interface/ethernet/sfp-sfpplus1")["disabled"] == "true"
+
+        change["value"] = True
+        sfp = iface(device(emu.collect(BR, "apply", change=change)), "sfp-sfpplus1")
+        assert sfp["enabled"] is True and sfp["up"] is True
+        ports = device(emu.collect(BR))["interfaces"]
+        assert all(p["enabled"] for p in ports)
+
+        # A port the router does not have: an error, nothing changed.
+        out = emu.collect(BR, "apply", change=dict(change, port="ether42"))
+        assert "ether42" in out["error"]

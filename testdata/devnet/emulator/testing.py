@@ -94,9 +94,15 @@ def plugin_python(plugin: str) -> Path:
 
 
 def run_plugin(
-    plugin: str, config: dict[str, Any], action: str = "collect", state_dir: Path | None = None, timeout: float = 180
+    plugin: str,
+    config: dict[str, Any],
+    action: str = "collect",
+    state_dir: Path | None = None,
+    timeout: float = 180,
+    change: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Run a plugin once, the way Omini does: the request on stdin, the answer on stdout."""
+    """Run a plugin once, the way Omini does: the request on stdin, the answer on stdout
+    (with the change to apply for action "apply")."""
     d = plugin_dir(plugin)
     assert d is not None
     py = plugin_python(plugin)
@@ -105,7 +111,9 @@ def run_plugin(
     with contextlib.ExitStack() as stack:
         if state_dir is None:
             state_dir = Path(stack.enter_context(tempfile.TemporaryDirectory()))
-        req = {"protocol": 1, "action": action, "config": config, "state_dir": str(state_dir)}
+        req: dict[str, Any] = {"protocol": 1, "action": action, "config": config, "state_dir": str(state_dir)}
+        if change is not None:
+            req["change"] = change
         env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "LANG", "TMPDIR") or k.startswith("LC_")}
         proc = subprocess.run(
             [str(py), entry],
@@ -183,7 +191,9 @@ class Emulator:
     def config(self, api: str) -> dict[str, Any]:
         return next(c for n, _, c in self.integrations() if n == api)
 
-    def collect(self, api: str, action: str = "collect", state_dir: Path | None = None) -> dict[str, Any]:
+    def collect(
+        self, api: str, action: str = "collect", state_dir: Path | None = None, change: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """Run the plugin of one emulated API against it."""
         plugin = next(p for n, p, _ in self.integrations() if n == api)
-        return run_plugin(plugin, self.config(api), action, state_dir)
+        return run_plugin(plugin, self.config(api), action, state_dir, change=change)

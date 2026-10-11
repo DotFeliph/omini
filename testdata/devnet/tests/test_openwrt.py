@@ -226,10 +226,69 @@ def test_raw_api(world: World) -> None:
             "phy0-ap1": ("Loja-Clientes", "Master", "ax"),
             "phy1-ap1": ("Loja-Clientes", "Master", "ax"),
         }
-        # Outside the ACL: uci (ubus level) and any other file (rpcd's path check).
-        assert rpc(url, sid, "uci", "get", {"config": "wireless"})["error"]["code"] == -32002
+        # Outside the ACL: other uci configs (rpcd's uci check), other ubus methods and any other file (rpcd's path
+        # check).
+        assert rpc(url, sid, "uci", "get", {"config": "wireless"})["result"] == [openwrt.PERMISSION_DENIED]
+        assert rpc(url, sid, "uci", "commit", {"config": "network"})["error"]["code"] == -32002
+        assert rpc(url, sid, "uci", "get", {"config": "network", "section": "lan", "option": "proto"})["result"] == [
+            0,
+            {"value": "static"},
+        ]
         assert rpc(url, sid, "file", "read", {"path": "/etc/shadow"})["result"] == [openwrt.PERMISSION_DENIED]
         assert rpc(url, sid, "system", "board")["result"][1]["release"]["target"] == "mediatek/filogic"
         dump = rpc(url, sid, "network.interface", "dump")["result"][1]["interface"]
         assert {i["interface"] for i in dump} == {"guest", "lan", "loopback", "wan", "wan6"}
     assert acme.APIS[API]["node"] == NODE
+
+
+def test_disable_and_enable_a_port() -> None:
+    with Emulator(at=SAT_15, apis=[API], world=World()) as emu:
+        key = device(emu.collect(API))["key"]
+        change = {"device": key, "kind": "port.enabled", "port": "lan3", "value": False}
+        lan3 = ifaces(device(emu.collect(API, "apply", change=change)))["lan3"]
+        assert (lan3["enabled"], lan3["up"]) == (False, False)  # the store PC there drops
+        by = ifaces(device(emu.collect(API)))
+        assert by["lan3"]["enabled"] is False and "speed_mbps" not in by["lan3"]
+        assert by["lan2"]["enabled"] is True and by["lan2"]["up"] is True
+        # Confirmed: rpcd's rollback timer does not bring it back.
+        emu.set_time(SAT_15 + 120)
+        assert ifaces(device(emu.collect(API)))["lan3"]["enabled"] is False
+
+        change["value"] = True
+        lan3 = ifaces(device(emu.collect(API, "apply", change=change)))["lan3"]
+        assert lan3["enabled"] is True and lan3["up"] is True
+        ports = ifaces(device(emu.collect(API)))
+        assert all(ports[p]["enabled"] for p in openwrt.PORTS)
+        assert "enabled" not in ports["eth0"]  # the switch's CPU port is not offered
+
+
+def test_an_unconfirmed_apply_is_rolled_back() -> None:
+    with Emulator(at=SAT_15, apis=[API], world=World()) as emu:
+        url, sec = emu.urls[API], emu.secrets[API]
+        sid = rpc(
+            url, openwrt.NULL_SESSION, "session", "login", {"username": sec["username"], "password": sec["password"]}
+        )["result"][1]["ubus_rpc_session"]
+        rpc(url, sid, "uci", "add", {"config": "network", "type": "device", "values": {"name": "lan1", "enabled": "0"}})
+        assert rpc(url, sid, "uci", "apply", {"rollback": True, "timeout": 30})["result"] == [0]
+        assert rpc(url, sid, "network.device", "status", {"name": "lan1"})["result"][1]["present"] is False
+        # Omini's own apply waits: another change is pending confirmation.
+        out = emu.collect(API, "apply", change={"device": "x", "kind": "port.enabled", "port": "lan2", "value": False})
+        assert "another change waiting to be confirmed" in out["error"]
+        emu.set_time(SAT_15 + 31)  # not confirmed: rpcd restores the file and the port comes back
+        assert ifaces(device(emu.collect(API)))["lan1"]["enabled"] is True
+
+
+def test_a_read_only_acl_maps_but_does_not_change(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The login without "list write": only the read block of the README's ACL file.
+    acl = json.loads(json.dumps(openwrt.ACL))
+    acl["ubus"]["uci"] = ["get"]
+    acl["uci"] = {"network": ["read"]}
+    monkeypatch.setattr(openwrt, "ACL", acl)
+    with Emulator(at=SAT_15, apis=[API], world=World()) as emu:
+        dev = device(emu.collect(API))
+        assert ifaces(dev)["lan3"]["enabled"] is True
+        change = {"device": dev["key"], "kind": "port.enabled", "port": "lan3", "value": False}
+        out = emu.collect(API, "apply", change=change)
+        assert "the ACL of user 'omini' does not allow changes (ubus uci revert)" in out["error"]
+        assert "list write 'omini'" in out["error"]
+        assert ifaces(device(emu.collect(API)))["lan3"]["enabled"] is True

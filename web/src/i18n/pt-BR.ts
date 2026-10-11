@@ -7,6 +7,7 @@ const ptBR: typeof en = {
     devices: 'Dispositivos',
     alerts: 'Alertas',
     flows: 'Fluxos',
+    services: 'DNS e DHCP',
     integrations: 'Integrações',
     settings: 'Configurações',
     expand: 'Expandir menu',
@@ -220,11 +221,12 @@ const ptBR: typeof en = {
     randomMac: 'MAC privado (aleatório)',
     lastSeen: 'Visto por último',
     noPorts: 'Sem dados de portas.',
-    portDown: 'desligada',
+    portDown: 'sem link',
     halfDuplex: 'half duplex',
     gateways: 'Gateways',
     loss: 'perda',
     gatewayStatus: { up: 'Online', degraded: 'Instável', down: 'Offline', unknown: 'Desconhecido' },
+    gatewaysDown: '{n} com problema',
     integration: 'Integração',
     classification: 'Identificação',
     detectedBy: 'Detectado por',
@@ -290,6 +292,48 @@ const ptBR: typeof en = {
     server: 'Servidor',
     unknown: 'Desconhecido',
     client: 'Cliente',
+  },
+  services: {
+    title: 'DNS e DHCP',
+    subtitle: 'Quem entrega endereços e resolve nomes na sua rede, verificado a cada rodada.',
+    checked: 'Verificado {when}',
+    tabs: { dhcp: 'DHCP', dns: 'DNS' },
+    dhcp: {
+      answered:
+        'Nenhum servidor DHCP respondeu | 1 servidor respondeu | {n} servidores responderam',
+      noAnswer: 'Nenhum servidor DHCP respondeu: quem entra na rede não recebe endereço.',
+      rogue: 'Um servidor desconhecido também respondeu: {ips}.',
+      notChecked: 'Não verificado: {error}',
+      servers: 'Servidores',
+      server: 'Servidor',
+      gives: 'Entrega',
+      answer: 'Resposta',
+      gateway: 'gateway',
+      lease: 'lease de {time}',
+      unknown: 'Desconhecido',
+      pools: 'Pools',
+      leases: 'Concessões ({n})',
+      search: 'Buscar por nome, IP ou MAC',
+      device: 'Dispositivo',
+      expires: 'Expira',
+      none: 'Ainda não há informação de DHCP.',
+      noneHint:
+        'Ligue "DHCP check" em Integrações → Network scan, ou adicione a integração do seu roteador.',
+    },
+    dns: {
+      server: 'Servidor',
+      status: 'Situação',
+      external: 'Nome da internet',
+      local: 'Nome local',
+      ok: 'OK',
+      down: 'Não responde',
+      slow: 'Lento',
+      localFails: 'Nomes locais falham',
+      failed: 'falhou: {error}',
+      errors: { timeout: 'sem resposta', refused: 'recusado', notfound: 'não encontrado' },
+      none: 'Nenhum servidor DNS verificado ainda.',
+      noneHint: 'Ligue "DNS check" em Integrações → Network scan.',
+    },
   },
   flows: {
     title: 'Fluxos',
@@ -435,6 +479,21 @@ const ptBR: typeof en = {
         title: 'A descoberta da rede está limitada aqui',
         detail: 'Indisponível onde o Omini roda: {what}.',
       },
+      dhcp_no_offer: {
+        title: 'Nenhum servidor DHCP responde em {iface}',
+        detail: 'Quem entra na rede não recebe endereço.',
+      },
+      dhcp_rogue: {
+        title: 'Servidor DHCP desconhecido em {ip}',
+        detail:
+          'Ele responde pedidos de endereço em {iface} além do seu roteador: aparelhos podem receber um endereço errado.',
+      },
+      dns_down: { title: 'O DNS {server} não responde', detail: 'Não resolveu {name}: {error}.' },
+      dns_slow: {
+        title: 'O DNS {server} está lento',
+        detail: 'Levou {ms} ms para resolver um nome.',
+      },
+      dns_local: { title: 'O DNS {server} não resolve nomes locais', detail: '{name}: {error}.' },
     },
     tips: {
       device_offline:
@@ -478,6 +537,15 @@ const ptBR: typeof en = {
         'Uma visita, um aparelho novo... ou alguém que não deveria estar na sua rede.',
       discovery_limited:
         'Veja em Integrações → Network scan o que falta e como resolver (quase sempre network_mode: host).',
+      dhcp_no_offer:
+        'Veja se o servidor DHCP do roteador está ligado, e o cabo desta rede até ele.',
+      dhcp_rogue:
+        'Ache o aparelho com esse endereço e MAC (quase sempre um roteador ligado por uma porta LAN) e desligue o DHCP dele.',
+      dns_down:
+        'Veja se o servidor DNS está rodando e tem internet; enquanto isso, o DHCP pode entregar outro.',
+      dns_slow: 'Veja os servidores para onde ele encaminha e a carga dele.',
+      dns_local:
+        'Veja se o servidor DNS conhece o domínio local (nomes do DHCP, registros locais).',
     },
   },
   traffic: {
@@ -901,6 +969,7 @@ const ptBR: typeof en = {
     sections: {
       general: { title: 'Geral', hint: 'Tema e idioma' },
       map: { title: 'Mapa', hint: 'Como o mapa agrupa os clientes' },
+      changes: { title: 'Alterações', hint: 'O que o Omini pode mudar nos seus equipamentos' },
       notifications: {
         title: 'Notificações',
         hint: 'Telegram, e-mail, Slack, Discord, ntfy, webhook',
@@ -935,6 +1004,33 @@ const ptBR: typeof en = {
     },
     about: 'Sobre',
     version: 'Versão {v}',
+    changes: {
+      destructive: 'Permitir ações destrutivas',
+      destructiveHint:
+        'Alterações que cortam o acesso do Omini, ou a internet da rede (o uplink de um switch, a porta do roteador). Cada uma pede confirmação duas vezes.',
+    },
+  },
+  changes: {
+    disable: 'Desligar porta',
+    enable: 'Ligar porta',
+    applying: 'Aplicando…',
+    disabled: 'Desligada',
+    confirmDisable: 'Desligar {port}?',
+    confirmDisableOf: 'Desligar {port} ({who})?',
+    confirmEnable: 'Ligar {port}?',
+    cancel: 'Cancelar',
+    again: 'Desligar mesmo assim',
+    blocked: 'Protegida: {why} Para fazer isso, permita ações destrutivas em Configurações.',
+    askAgain: 'Esta é uma ação destrutiva: {why} Desligar mesmo assim?',
+    reasons: {
+      omini: 'É por esta porta que o Omini chega a este equipamento.',
+      internet: 'Esta porta é o caminho até o roteador e a internet.',
+    },
+    history: 'Alterações',
+    historyEmpty: 'Nenhuma alteração feita pelo Omini ainda.',
+    portEnabled: '{port}: ligada',
+    portDisabled: '{port}: desligada',
+    failed: 'não aplicada: {error}',
   },
 }
 

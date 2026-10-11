@@ -32,6 +32,10 @@ const MinPasswordLength = 8
 var BcryptCost = bcrypt.DefaultCost
 
 type Service struct {
+	// NoLogin signs every request in as the admin (development only: Omini
+	// allows it only when listening on a loopback address).
+	NoLogin bool
+
 	store *store.Store
 	ttl   time.Duration
 	now   func() time.Time
@@ -99,6 +103,20 @@ func (s *Service) Login(ctx context.Context, username, password string) (string,
 
 // Authenticate returns the user owning a valid session token.
 func (s *Service) Authenticate(ctx context.Context, token string) (store.User, error) {
+	u, err := s.sessionUser(ctx, token)
+	if errors.Is(err, ErrUnauthenticated) && s.NoLogin {
+		name, err := s.store.AdminUsername(ctx)
+		if errors.Is(err, store.ErrNotFound) {
+			return store.User{}, ErrUnauthenticated // no admin yet: the setup page
+		} else if err != nil {
+			return store.User{}, err
+		}
+		return s.store.GetUserByName(ctx, name)
+	}
+	return u, err
+}
+
+func (s *Service) sessionUser(ctx context.Context, token string) (store.User, error) {
 	if token == "" {
 		return store.User{}, ErrUnauthenticated
 	}

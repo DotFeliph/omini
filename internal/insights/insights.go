@@ -79,6 +79,11 @@ type Input struct {
 	Core map[int64]bool
 }
 
+// Events are rules about something that happened (a restart, a device that
+// joined), not a problem that goes on: their alert ends after a while, and
+// that end is no news (it is never notified as resolved).
+var Events = map[string]bool{"device_rebooted": true, "new_device": true, "new_devices_burst": true}
+
 // Rule is one check.
 type Rule func(in Input, idx index) []Insight
 

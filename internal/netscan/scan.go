@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/netip"
 	"os"
 	"slices"
@@ -43,11 +44,16 @@ type Integration struct {
 	Fingerprints FingerprintStore
 	// ListenDHCP reads DHCP requests (default: a packet socket; tests replace it).
 	ListenDHCP func(ctx context.Context, packet func([]byte)) error
+	// ProbeDHCP and QueryDNS run the DHCP and DNS checks (tests replace them).
+	ProbeDHCP func(ctx context.Context, iface string, mac net.HardwareAddr) ([]model.DhcpOffer, error)
+	QueryDNS  func(ctx context.Context, server, name string) model.DnsQuery
 
 	dhcp dhcpWatch
 	mu   sync.Mutex
 	deep map[string]deepInfo // per host (MAC, or IP when unknown)
-	now  func() time.Time
+	// SNMP devices read, by device key: where to send a change.
+	agents map[string]agent
+	now    func() time.Time
 }
 
 type deepInfo struct {
@@ -72,6 +78,8 @@ func (*Integration) Info() integration.Info {
 		Kind:   integration.KindCore,
 		Single: true, // one scan covers every subnet: two would compete
 		Fields: fields(),
+		// Ports of SNMP devices, with a write community or a v3 user allowed to write.
+		Changes: []model.ChangeKind{model.ChangeKindPortEnabled},
 	}
 }
 
@@ -101,10 +109,16 @@ func fields() []model.FormField {
 		method("web_titles", "Web page titles", "Reads the title of web interfaces to recognize apps (Proxmox, TrueNAS, Home Assistant...)."),
 		method("ssh_banners", "SSH banners", "Reads the SSH version line, which often names the operating system."),
 		method("dhcp", "DHCP fingerprints", "Watches the address requests devices send when they join the network: what they ask for tells their operating system (Android, Windows, Apple, Linux...). Only watches, never answers; sees this server's own network; needs raw sockets (root in Docker)."),
-		method("snmp", "SNMP", "Reads ports, traffic, neighbors (LLDP), MAC tables and ARP from managed switches, routers and firewalls that have SNMP (v2c or v3) enabled. Read-only."),
+		method("dhcp_check", "DHCP check", "Every round, asks the network for an address (DHCPDISCOVER, never taking one) to check the DHCP server answers, and that no other one does. Needs raw sockets (root in Docker)."),
+		method("dns_check", "DNS check", "Every round, each DNS server of the network resolves an external name and a local one, timed."),
+		method("snmp", "SNMP", "Reads ports, traffic, neighbors (LLDP), MAC tables and ARP from managed switches, routers and firewalls that have SNMP (v2c or v3) enabled. With a write community (or a v3 user allowed to write) it can also enable and disable their ports."),
 		{
 			Key: "snmp_communities", Type: model.FormFieldTypeSecret, Label: model.Ptr("SNMP communities"), Default: "public", Group: methods,
 			Help: model.Ptr(`Read-only communities to try, separated by commas (e.g. "public, homelab"). It is the "community" or "read community" set in the device's SNMP settings.`),
+		},
+		{
+			Key: "snmp_write_community", Type: model.FormFieldTypeSecret, Label: model.Ptr("SNMP write community"), Group: methods,
+			Help: model.Ptr(`To enable and disable ports of SNMP devices from Omini: the "write" or "read-write" community of the device's SNMP settings. Empty: SNMP v2c devices are only read (a v3 user allowed to write also works).`),
 		},
 		{
 			Key: "snmp_v3_user", Type: model.FormFieldTypeString, Label: model.Ptr("User"), Group: v3,
@@ -125,6 +139,11 @@ func fields() []model.FormField {
 			Help: model.Ptr("Empty uses the common homelab ports. Example: 22,80,443,8000-8100 (at most 1024 ports)."),
 		},
 		{
+			Key: "dns_test_name", Type: model.FormFieldTypeString, Label: model.Ptr("External name for the DNS check"),
+			Default: DefaultDNSName, Group: advanced,
+			Help: model.Ptr("A name on the internet each DNS server must resolve."),
+		},
+		{
 			Key: "deep_interval", Type: model.FormFieldTypeInt, Label: model.Ptr("Re-check ports and names every (hours)"),
 			Default: 6, Group: advanced,
 			Help: model.Ptr("Ports, names and banners are checked once per new device and again after this many hours."),
@@ -135,7 +154,10 @@ func fields() []model.FormField {
 // options are the scan settings of one integration instance.
 type options struct {
 	arp, ping, ports, dns, netbios, mdns, ssdp, titles, banners, snmp, dhcp bool
+	dhcpCheck, dnsCheck                                                     bool
+	dnsName                                                                 string
 	communities                                                             []string
+	writeCommunity                                                          string
 	v3                                                                      *snmp.V3
 	portList                                                                []int
 	deepEvery                                                               time.Duration
@@ -168,6 +190,12 @@ func (s *Integration) options(cfg integration.Config) (options, error) {
 	}
 	if len(o.communities) == 0 {
 		o.communities = []string{"public"}
+	}
+	o.writeCommunity = strings.TrimSpace(cfg.String("snmp_write_community"))
+	o.dhcpCheck, o.dnsCheck = cfg.Bool("dhcp_check", true), cfg.Bool("dns_check", true)
+	o.dnsName = strings.TrimSpace(cfg.String("dns_test_name"))
+	if o.dnsName == "" {
+		o.dnsName = DefaultDNSName
 	}
 	if len(o.communities) > 10 {
 		return o, fmt.Errorf("at most 10 SNMP communities")
@@ -412,6 +440,11 @@ func (s *Integration) Collect(ctx context.Context, cfg integration.Config) ([]mo
 		wg.Add(1)
 		go func() { defer wg.Done(); ssdpRes = browseSSDP(ctx, 3*time.Second, inScope) }()
 	}
+	var dhcpRes map[string]model.DhcpCheck
+	if opts.dhcpCheck {
+		wg.Add(1)
+		go func() { defer wg.Done(); dhcpRes = s.checkDHCP(ctx, locals) }()
+	}
 
 	// Sweep: every address gets one UDP datagram (forces ARP) and an ICMP echo.
 	var ping *pinger
@@ -511,10 +544,37 @@ func (s *Integration) Collect(ctx context.Context, cfg integration.Config) ([]mo
 		managed = s.collectSNMP(ctx, list, opts.v3)
 	}
 
+	var dnsRes []model.DnsCheck
+	if opts.dnsCheck {
+		dnsRes = s.checkDNS(ctx, opts.dnsName, dhcpRes, gateway, list)
+	}
+
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	return append(s.devices(prefixes, locals, hosts), managed...), nil
+	devices := s.devices(prefixes, locals, hosts)
+	attachChecks(devices, prefixes, locals, dhcpRes, dnsRes)
+	return append(devices, managed...), nil
+}
+
+// attachChecks puts each local network's DHCP check on its device (one per
+// prefix, in order), and the DNS checks on the first local network's.
+func attachChecks(devices []model.Device, prefixes []netip.Prefix, locals []localNet,
+	dhcp map[string]model.DhcpCheck, dns []model.DnsCheck,
+) {
+	first := true
+	for _, l := range locals {
+		i := slices.IndexFunc(prefixes, func(p netip.Prefix) bool { return p.Contains(l.Self) })
+		if i < 0 || i >= len(devices) {
+			continue
+		}
+		if c, ok := dhcp[l.Iface]; ok {
+			devices[i].DhcpChecks = append(devices[i].DhcpChecks, c)
+		}
+		if first {
+			devices[i].DnsChecks, first = dns, false
+		}
+	}
 }
 
 // snmpTarget is a host's agent with the credential it answered to (a
@@ -547,6 +607,12 @@ func (s *Integration) collectSNMP(ctx context.Context, hosts []*hostAcc, v3 *snm
 		h.src = appendUnique(h.src, "snmp")
 		out = append(out, d)
 		mu.Unlock()
+		s.mu.Lock()
+		if s.agents == nil {
+			s.agents = map[string]agent{}
+		}
+		s.agents[d.Key] = agent{ip: h.ip, credential: credential}
+		s.mu.Unlock()
 	})
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
 	return out

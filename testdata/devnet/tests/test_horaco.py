@@ -155,3 +155,18 @@ def test_halo_reboot_at_dawn(world):
     fdb = {(e["mac"], e["port"]) for e in dev["fdb"]}
     assert (snap.node("halo-wh-02").mac, "Port 2") not in fdb
     assert (snap.node("halo-wh-01").mac, "Port 1") in fdb
+
+
+def test_disable_and_enable_a_port(world):
+    with Emulator(at=TUE_1030, apis=["horaco"], world=World()) as emu:
+        key = device(emu.collect("horaco"))["key"]
+        change = {"device": key, "kind": "port.enabled", "port": "Port 2", "value": False}
+        p2 = ifaces(device(emu.collect("horaco", "apply", change=change)))["Port 2"]
+        assert (p2["enabled"], p2["up"]) == (False, False)  # the Halo satellite there drops
+        assert ifaces(device(emu.collect("horaco")))["Port 2"]["enabled"] is False
+
+        change["value"] = True
+        p2 = ifaces(device(emu.collect("horaco", "apply", change=change)))["Port 2"]
+        assert p2["enabled"] is True and p2["up"] is True
+        ports = ifaces(device(emu.collect("horaco")))
+        assert all(p["enabled"] for p in ports.values())

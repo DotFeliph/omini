@@ -188,3 +188,34 @@ def test_session_required() -> None:
             urllib.request.urlopen(emu.urls["unifi"] + "/api/s/default/stat/device", context=ctx, timeout=10)
         assert e.value.code == 401
         assert b"api.err.LoginRequired" in e.value.read()
+
+
+def test_disable_and_enable_a_port() -> None:
+    world = World()
+    with Emulator(at=TUE_1030, apis=["unifi"], world=world) as emu:
+
+        def switch(res: dict) -> dict:
+            assert "error" not in res, res.get("error")
+            return next(d for d in res["devices"] if d["name"] == "sw-f3-01")
+
+        def ports(res: dict) -> dict[str, dict]:
+            return {i["name"]: i for i in switch(res)["interfaces"]}
+
+        key = switch(emu.collect("unifi"))["key"]
+        change = {"device": key, "kind": "port.enabled", "port": "Port 30", "value": False}
+        after = emu.collect("unifi", "apply", change=change)
+        p30 = ports(after)["Port 30"]
+        assert (p30["enabled"], p30["up"]) == (False, False)  # the printer there drops
+        assert ports(emu.collect("unifi"))["Port 30"]["enabled"] is False
+        assert ports(after)["Port 29"]["enabled"] is True
+
+        change["value"] = True
+        p30 = ports(emu.collect("unifi", "apply", change=change))["Port 30"]
+        assert p30["enabled"] is True and p30["up"] is True
+        assert all(p["enabled"] for p in ports(emu.collect("unifi")).values())
+
+        # A View Only account reads the map, but cannot change a port.
+        emu.secrets["unifi"]["read_only"] = True
+        res = emu.collect("unifi", "apply", change=dict(change, value=False))
+        assert "Full Management or Site Admin" in res["error"]
+        assert ports(emu.collect("unifi"))["Port 30"]["enabled"] is True

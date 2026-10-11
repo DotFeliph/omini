@@ -18,6 +18,8 @@ export interface Prefs {
   hideOffline: boolean
   /** Map areas collapsed into a bubble. */
   collapsedAreas: number[]
+  /** Sections of the device panel the user opened (the rest stay folded). */
+  openSections: string[]
 }
 
 const KEY = 'omini.prefs'
@@ -40,6 +42,7 @@ function load(): Prefs {
     sidebarExpanded: false,
     hideOffline: false,
     collapsedAreas: [],
+    openSections: [],
   }
   try {
     const raw = localStorage.getItem(KEY)

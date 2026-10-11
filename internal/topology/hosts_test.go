@@ -91,6 +91,39 @@ func TestScanAndIntegrationDescribingTheSameRouterMerge(t *testing.T) {
 	}
 }
 
+// A laptop on cable and Wi-Fi at once answers ARP for both of its addresses
+// from either interface: the router's ARP gives the cable's address to the
+// Wi-Fi MAC. Each interface keeps the address its DHCP lease gives it.
+func TestTwoInterfacesOfOneMachineKeepTheirOwnAddresses(t *testing.T) {
+	const cable, wifi, printer = "00:e0:4c:00:00:a3", "58:6d:67:00:00:b2", "00:80:77:00:00:01"
+	router := model.Device{
+		Key: "00:e0:4c:68:00:02", Name: "opnsense", Role: model.Ptr(model.DeviceRoleFirewall),
+		MACs: []model.MACAddress{"00:e0:4c:68:00:02"},
+		Arp: []model.ArpEntry{
+			{IP: "192.168.1.108", MAC: wifi},
+			{IP: "192.168.1.169", MAC: printer}, // static, inside the pool: a real duplicate
+		},
+		DhcpLeases: []model.DhcpLease{
+			{IP: "192.168.1.108", MAC: cable},
+			{IP: "192.168.1.169", MAC: wifi, Hostname: model.Ptr("laptop")},
+		},
+	}
+	sw := model.Device{Key: "aa:00:00:00:00:01", Name: "sw", Fdb: []model.FdbEntry{{MAC: cable, Port: "5"}}}
+	nodes := byID(topology.Build([]topology.Source{
+		{IntegrationID: 1, Online: true, Devices: []model.Device{router}},
+		{IntegrationID: 2, Online: true, Devices: []model.Device{sw}},
+	}))
+	if n := nodes["mac:"+cable]; n.IP != "192.168.1.108" {
+		t.Errorf("cable IP = %q, want 192.168.1.108", n.IP)
+	}
+	if n := nodes["mac:"+wifi]; n.IP != "192.168.1.169" {
+		t.Errorf("Wi-Fi IP = %q, want 192.168.1.169", n.IP)
+	}
+	if n := nodes["mac:"+printer]; n.IP != "192.168.1.169" {
+		t.Errorf("printer without a lease keeps its ARP address: %q", n.IP)
+	}
+}
+
 func TestClientsGetTheVendorFromTheMAC(t *testing.T) {
 	sw := model.Device{Key: "aa:00:00:00:00:01", Name: "sw", Fdb: []model.FdbEntry{{MAC: "b8:27:eb:12:34:56", Port: "3"}}}
 	nodes := byID(topology.Build([]topology.Source{{IntegrationID: 1, Online: true, Devices: []model.Device{sw}}}))

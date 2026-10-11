@@ -52,7 +52,11 @@ func FromDevice(d model.Device, opts Options) []gosnmp.SnmpPDU {
 		speed := model.Deref(iface.SpeedMbps) * 1_000_000
 		add(gosnmp.Gauge32, uint32(min(speed, 4_294_967_295)), "1.3.6.1.2.1.2.2.1.5.%d", idx)
 		add(gosnmp.OctetString, macBytes(model.Deref(iface.MAC)), "1.3.6.1.2.1.2.2.1.6.%d", idx)
-		add(gosnmp.Integer, 1, "1.3.6.1.2.1.2.2.1.7.%d", idx)
+		admin := 1
+		if iface.Enabled != nil && !*iface.Enabled {
+			admin = 2
+		}
+		add(gosnmp.Integer, admin, "1.3.6.1.2.1.2.2.1.7.%d", idx)
 		oper := 2
 		if model.Deref(iface.Up) {
 			oper = 1

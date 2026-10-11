@@ -50,9 +50,21 @@ func TestLoadConfigErrors(t *testing.T) {
 		{"OMINI_POLL_INTERVAL": "soon"},
 		{"OMINI_LOG_LEVEL": "loud"},
 		{"OMINI_AUTOSCAN": "sometimes"},
+		{"OMINI_AUTH": "off"}, // :8080 listens on every address
+		{"OMINI_AUTH": "off", "OMINI_ADDR": "192.168.1.10:8080"},
+		{"OMINI_AUTH": "maybe"},
 	} {
 		if _, err := loadConfig(env(vars)); err == nil {
 			t.Errorf("loadConfig(%v) should fail", vars)
+		}
+	}
+}
+
+func TestLoginOffOnlyOnLoopback(t *testing.T) {
+	for _, addr := range []string{"127.0.0.1:8093", "localhost:8093", "[::1]:8093"} {
+		cfg, err := loadConfig(env(map[string]string{"OMINI_AUTH": "off", "OMINI_ADDR": addr}))
+		if err != nil || !cfg.NoLogin {
+			t.Errorf("%s: %+v %v", addr, cfg, err)
 		}
 	}
 }

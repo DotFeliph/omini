@@ -11,10 +11,10 @@ from typing import Any
 
 import pytest
 
-from emulator import acme
+from emulator import acme, configs
 from emulator.testing import Emulator
 from emulator.vendors import snmp as s
-from emulator.world import at_local
+from emulator.world import World, at_local
 
 WED_11 = at_local(2, 11, 0, week=1)  # nas_disk_hot is on
 MON_11 = at_local(0, 11, 0, week=1)
@@ -29,14 +29,18 @@ _reqid = itertools.count(1000)
 # A minimal client
 
 
-def send(addr: tuple[str, int], msg: bytes, timeout: float = 0.5) -> bytes | None:
+def send(addr: tuple[str, int], msg: bytes, timeout: float = 1.0, tries: int = 3) -> bytes | None:
+    """One request, retried like SNMP managers do (Omini too): the agent's first
+    answer builds its MIB, which on a busy machine takes longer than one timeout."""
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.settimeout(timeout)
-        sock.sendto(msg, addr)
-        try:
-            return sock.recv(65535)
-        except TimeoutError:
-            return None
+        for _ in range(tries):
+            sock.sendto(msg, addr)
+            try:
+                return sock.recv(65535)
+            except TimeoutError:
+                continue
+    return None
 
 
 def v2_message(community: str, tag: int, oids: list[str], version: int = 1, a: int = 0, b: int = 0) -> bytes:
@@ -434,3 +438,29 @@ def test_v3_every_auth_and_privacy_protocol(auth: str, priv: str) -> None:
         assert got is not None
         assert got[0].flags & 3 == (1 if priv == "none" else 3)
         assert got[1].tag == s.RESPONSE and text(got[1].varbinds[0][1])  # an LLDP neighbor's name
+
+
+def set_message(community: str, oid: str, value: int) -> bytes:
+    pdu = s.enc_pdu(s.SET, next(_reqid), 0, 0, [s.enc_varbind(s.OI(oid), (s.INTEGER, value))])
+    return s.tlv(s.SEQUENCE, s.enc_int(1) + s.tlv(s.OCTETS, community.encode()) + pdu)
+
+
+def test_set_disables_a_port_with_the_write_community_only() -> None:
+    with Emulator(at=WED_11, apis=["snmp-sw-f1-01"], world=World()) as emu:
+        addr = emu.addrs["snmp-sw-f1-01"]
+        c = v2(emu, "snmp-sw-f1-01")
+        oper = c.walk("1.3.6.1.2.1.2.2.1.8")
+        idx = next(oid[-1] for oid, v in sorted(oper.items()) if v == (s.INTEGER, 1))  # a port with a link
+        admin = f"1.3.6.1.2.1.2.2.1.7.{idx}"
+
+        refused = v2_pdu(send(addr, set_message(emu.secrets["snmp"]["community"], admin, 2)))
+        assert refused.a == 6  # noAccess: the read community cannot write
+
+        rw = configs.write_community(emu.secrets)
+        assert v2_pdu(send(addr, set_message(rw, "1.3.6.1.2.1.1.5.0", 2))).a == 17  # notWritable
+        done = v2_pdu(send(addr, set_message(rw, admin, 2)))
+        assert done.a == 0
+        assert c.get(admin)[0] == (s.INTEGER, 2)
+        assert c.get(f"1.3.6.1.2.1.2.2.1.8.{idx}")[0] == (s.INTEGER, 2)  # the link goes down
+        assert v2_pdu(send(addr, set_message(rw, admin, 1))).a == 0
+        assert c.get(admin)[0] == (s.INTEGER, 1)

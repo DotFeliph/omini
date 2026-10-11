@@ -263,6 +263,22 @@ var migrations = []string{
 	ALTER TABLE areas DROP COLUMN auto;
 	ALTER TABLE areas DROP COLUMN dismissed;
 	`,
+	// 20: configuration changes made from Omini (kept a year), shown in the
+	// device panel.
+	`
+	CREATE TABLE config_changes (
+		id             INTEGER PRIMARY KEY,
+		node_id        TEXT NOT NULL,
+		integration_id INTEGER NOT NULL,
+		kind           TEXT NOT NULL,
+		port           TEXT NOT NULL DEFAULT '',
+		before         TEXT NOT NULL DEFAULT '', -- JSON value ('' when unknown)
+		after          TEXT NOT NULL,            -- JSON value
+		error          TEXT NOT NULL DEFAULT '', -- '' when it was applied
+		at             INTEGER NOT NULL          -- unix seconds
+	);
+	CREATE INDEX config_changes_node ON config_changes (node_id, at);
+	`,
 }
 
 // Open opens (creating if needed) the database at path and applies migrations.

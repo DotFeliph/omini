@@ -2,6 +2,7 @@
 
 from omini_sdk.models import (
     ArpEntry,
+    Change,
     Device,
     DhcpLease,
     DhcpPool,
@@ -25,6 +26,7 @@ from omini_sdk.plugin import Config, PluginError, log, plugin
 
 __all__ = [
     "ArpEntry",
+    "Change",
     "Config",
     "Device",
     "DhcpLease",

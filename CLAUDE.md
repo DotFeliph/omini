@@ -22,8 +22,9 @@ for how it is built.
 
 ## Principles
 
-1. **Read-only.** No integration may send commands that change a device's
-   configuration.
+1. **Changes are guarded.** A configuration change is one the plugin
+   declares, confirmed by the user, applied, verified and only then saved;
+   destructive ones (cutting Omini or the internet off) are blocked by default.
 2. **Lightweight.** One binary, SQLite, no external services. It must run on
    a Raspberry Pi.
 3. **Easy to contribute.** New device support is a YAML SNMP profile or a
@@ -112,4 +113,5 @@ make hooks       # install the git hooks (lefthook)
 
 ## Out of scope (for now)
 
-Write actions to devices, multi-tenancy.
+Multi-tenancy; jumbo frames, port mirroring, rate limits, QoS, IGMP and DHCP
+snooping.

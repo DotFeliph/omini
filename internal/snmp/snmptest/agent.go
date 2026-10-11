@@ -14,10 +14,12 @@ import (
 	"github.com/gosnmp/gosnmp"
 )
 
-// Agent answers Get, GetNext and GetBulk requests from a fixed set of variables.
+// Agent answers Get, GetNext and GetBulk requests from a fixed set of variables,
+// and Set requests with the write community (see AllowWrite).
 type Agent struct {
 	Community string
 	Port      int
+	write     string // the community allowed to Set (empty: none)
 
 	conn  net.PacketConn
 	mu    sync.RWMutex
@@ -63,6 +65,16 @@ func (a *Agent) AddCommunity(community string, pdus []gosnmp.SnmpPDU) {
 	a.mu.Unlock()
 }
 
+// AllowWrite lets a community change the agent's existing variables (Set);
+// it reads the same variables as the agent's community. Set with another
+// community answers noAccess, like a read-only community.
+func (a *Agent) AllowWrite(community string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.write = community
+	a.views[community] = a.views[a.Community]
+}
+
 func (a *Agent) serve(t testing.TB) {
 	defer a.wg.Done()
 	decoder := &gosnmp.GoSNMP{Version: gosnmp.Version2c, Logger: gosnmp.NewLogger(nil)}
@@ -90,8 +102,13 @@ func (a *Agent) serve(t testing.TB) {
 			Community: req.Community,
 			PDUType:   gosnmp.GetResponse,
 			RequestID: req.RequestID,
-			Variables: answer(vars, req),
 			Logger:    gosnmp.NewLogger(nil),
+		}
+		if req.PDUType == gosnmp.SetRequest {
+			resp.Variables = req.Variables
+			resp.Error, resp.ErrorIndex = a.set(req)
+		} else {
+			resp.Variables = answer(vars, req)
 		}
 		out, err := resp.MarshalMsg()
 		if err != nil {
@@ -180,4 +197,23 @@ func compareOID(a, b []int) int {
 		}
 	}
 	return len(a) - len(b)
+}
+
+// set changes existing variables, with the write community only.
+func (a *Agent) set(req *gosnmp.SnmpPacket) (gosnmp.SNMPError, uint8) {
+	if a.write == "" || req.Community != a.write {
+		return gosnmp.NoAccess, 1
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	vars := a.views[a.Community]
+	for i, v := range req.Variables {
+		name := "." + strings.TrimPrefix(v.Name, ".")
+		k := sort.Search(len(vars), func(j int) bool { return compareOID(vars[j].oid, parseOID(name)) >= 0 })
+		if k == len(vars) || vars[k].pdu.Name != name {
+			return gosnmp.NotWritable, uint8(i + 1) //nolint:gosec // a handful of variables
+		}
+		vars[k].pdu.Type, vars[k].pdu.Value = v.Type, v.Value
+	}
+	return gosnmp.NoError, 0
 }

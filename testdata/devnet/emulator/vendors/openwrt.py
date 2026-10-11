@@ -14,8 +14,15 @@ path outside the ACL's "file" section; a wrong password answers status 6 to
 Objects served: system (board, info), network.device (status),
 network.interface (dump), iwinfo (devices, info, assoclist), luci-rpc
 (getHostHints, getDHCPLeases), file (read, list: /proc/net/arp and the
-thermal zones), hostapd.<ifname> (get_clients) and session (login, access).
-Everything that changes comes from the world snapshot.
+thermal zones), hostapd.<ifname> (get_clients), session (login, access) and
+uci on the network config (get, set, add, delete, revert, changes, apply with
+rollback, confirm, rollback), like rpcd: changes are staged per session,
+`apply` saves them and reloads the network (a port whose `config device`
+section has `enabled '0'` goes down: netifd shows it `"present": false` and
+leaves it out of the full status), and with rollback the previous file comes
+back unless `confirm` arrives within the timeout. The ports' administrative
+state lives in the world design (Port.admin_up); everything else that changes
+comes from the world snapshot.
 """
 
 from __future__ import annotations
@@ -45,7 +52,8 @@ ROOT_KIB = 7_331_840  # the overlay (rootfs_data on the 8 GB eMMC), KiB
 TZ_OFFSET = -3 * 3600  # America/Sao_Paulo (system info "localtime" is local)
 
 # The ACL of the "omini" login: exactly the one in the plugin's README
-# (/usr/share/rpcd/acl.d/omini.json, granted as "read"). Tests may replace it.
+# (/usr/share/rpcd/acl.d/omini.json, granted as "read" and "write"; its read
+# and write blocks are merged here). Tests may replace it.
 ACL: dict[str, dict[str, list[str]]] = {
     "ubus": {
         "system": ["board", "info"],
@@ -54,7 +62,10 @@ ACL: dict[str, dict[str, list[str]]] = {
         "luci-rpc": ["getHostHints", "getDHCPLeases"],
         "iwinfo": ["devices", "info", "assoclist"],
         "file": ["read", "list"],
+        "uci": ["get", "set", "add", "delete", "revert", "apply", "confirm", "rollback"],
     },
+    # rpcd's "uci" scope: which configs the login may read and write.
+    "uci": {"network": ["read", "write"]},
     "file": {
         "/proc/net/arp": ["read"],
         "/sys/class/thermal": ["list"],
@@ -161,6 +172,10 @@ for _i in WIFI_IFACES:
 # ubus status codes (first element of a call's "result").
 OK, INVALID_COMMAND, INVALID_ARGUMENT, METHOD_NOT_FOUND, NOT_FOUND, NO_DATA, PERMISSION_DENIED = 0, 1, 2, 3, 4, 5, 6
 
+# Physical ports a `config device` section can disable (eth0 is the DSA conduit).
+PORTS = ("eth1", "lan1", "lan2", "lan3", "lan4", "lan5")
+APPLY_TIMEOUT = 30  # rpcd's default rollback timeout (seconds)
+
 STAT_KEYS = (
     "collisions",
     "rx_frame_errors",
@@ -202,6 +217,13 @@ class OpenWrt(HttpService):
     def __init__(self, *args: Any, **kw: Any) -> None:
         super().__init__(*args, **kw)
         self.sessions: dict[str, dict[str, Any]] = {}
+        # /etc/config/network (section name → options, built on first use),
+        # each session's staged copy, and the pending apply with rollback:
+        # (session, the file before, deadline).
+        self.network: dict[str, dict[str, Any]] | None = None
+        self.staged: dict[str, dict[str, dict[str, Any]]] = {}
+        self.pending: tuple[str, dict[str, dict[str, Any]], float] | None = None
+        self.sections = 0
 
     # ------------------------------------------------------------------ HTTP
 
@@ -263,6 +285,8 @@ class OpenWrt(HttpService):
         if not isinstance(args, dict):
             return self._error(rid, -32602, "Invalid parameters")
         user = self._session_user(sid, snap)
+        if self.pending and snap.t > self.pending[2]:
+            self._rollback()  # rpcd's timer: not confirmed in time
         if not self._allowed(user, obj, func):
             return self._error(rid, -32002, "Access denied")
         if obj not in OBJECTS:
@@ -324,6 +348,7 @@ class OpenWrt(HttpService):
             "acls": {
                 "access-group": {"omini": ["read"], "unauthenticated": ["read"]},
                 "ubus": {**{k: list(v) for k, v in ACL["ubus"].items()}, **UNAUTHENTICATED},
+                "uci": {k: list(v) for k, v in ACL.get("uci", {}).items()},
                 "file": {k: list(v) for k, v in ACL.get("file", {}).items()},
             },
             "data": {"username": user},
@@ -358,6 +383,8 @@ class OpenWrt(HttpService):
             ("file", "read"): self._file_read,
             ("file", "list"): self._file_list,
         }.get((obj, func))
+        if obj == "uci":
+            return self._uci(sid, func, args, snap)
         if handler is None and obj.startswith("hostapd.") and func == "get_clients":
             return self._hostapd_clients(obj.split(".", 1)[1], snap)
         if handler is None:
@@ -508,6 +535,11 @@ class OpenWrt(HttpService):
         out["eth1"] = self._ethernet(snap, "eth1", "ethernet", COPPER_2G5)
         for k in range(1, 6):
             out[f"lan{k}"] = self._ethernet(snap, f"lan{k}", "dsa", COPPER_1G)
+        # A port disabled in the config is not present for netifd: the full
+        # status leaves it out, asking for it by name says so.
+        off = {p for p in PORTS if not n.ports[p].admin_up}
+        for p in off:
+            del out[p]
         for br in ("br-lan", "br-guest"):
             p = n.ports[br]
             d = self._base("bridge", p.mac, True, True)
@@ -535,8 +567,153 @@ class OpenWrt(HttpService):
             out[w] = d
         name = args.get("name")
         if isinstance(name, str):
+            if name in off:
+                return OK, {"external": False, "present": False, "type": "Network device"}
             return (OK, out[name]) if name in out else (NOT_FOUND, None)
         return OK, out
+
+    # uci (rpcd-mod-uci), the network config only
+
+    def _network(self, snap: Snapshot) -> dict[str, dict[str, Any]]:
+        """/etc/config/network as saved: the bridges, the interfaces and a
+        `config device` section for each port the design has disabled."""
+        if self.network is None:
+            n = snap.node(self.node)
+            net: dict[str, dict[str, Any]] = {
+                "globals": {".type": "globals", "ula_prefix": "fd4c:9a2e:71b0::/48"},
+                "loopback": {".type": "interface", "device": "lo", "proto": "static", "ipaddr": "127.0.0.1"},
+            }
+            for br in ("br-lan", "br-guest"):
+                ports = [m for m in n.ports[br].members if not m.startswith("phy")]
+                net[self._new_section()] = {".type": "device", "name": br, "type": "bridge", "ports": ports}
+            for name, dev, proto in (("lan", "br-lan", "static"), ("guest", "br-guest", "static")):
+                ip = ipaddress.ip_interface(n.ports[dev].ips[0])
+                net[name] = {".type": "interface", "device": dev, "proto": proto, "ipaddr": str(ip)}
+            net["wan"] = {".type": "interface", "device": "eth1", "proto": "dhcp"}
+            net["wan6"] = {".type": "interface", "device": "eth1", "proto": "dhcpv6"}
+            for p in PORTS:
+                if not n.ports[p].admin_up:
+                    net[self._new_section()] = {".type": "device", "name": p, "enabled": "0"}
+            self.network = net
+        return self.network
+
+    def _new_section(self) -> str:
+        self.sections += 1
+        return f"cfg{self.sections:02x}0f15"
+
+    def _uci_allowed(self, config: Any, perm: str) -> bool:
+        return isinstance(config, str) and perm in ACL.get("uci", {}).get(config, [])
+
+    @staticmethod
+    def _values(net: dict[str, dict[str, Any]]) -> dict[str, Any]:
+        out = {}
+        for name, sec in net.items():
+            anonymous = name.startswith("cfg")
+            out[name] = {".anonymous": anonymous, ".type": sec[".type"], ".name": name}
+            out[name].update({k: (list(v) if isinstance(v, list) else v) for k, v in sec.items() if k != ".type"})
+        return out
+
+    def _uci(self, sid: str, func: str, args: dict[str, Any], snap: Snapshot) -> tuple[int, Any]:
+        saved = self._network(snap)
+        config = args.get("config")
+        if func in ("get", "set", "add", "delete", "revert", "changes"):
+            if config != "network":
+                # Only the network config exists here; others are outside the ACL anyway.
+                return (PERMISSION_DENIED, None) if not self._uci_allowed(config, "read") else (NOT_FOUND, None)
+            if not self._uci_allowed(config, "read" if func in ("get", "changes") else "write"):
+                return PERMISSION_DENIED, None
+        work = self.staged.get(sid, saved)
+        if func == "get":
+            values = self._values(work)
+            section, option = args.get("section"), args.get("option")
+            if isinstance(section, str):
+                if section not in values:
+                    return NOT_FOUND, None
+                if isinstance(option, str):
+                    v = values[section].get(option)
+                    return (OK, {"value": v}) if v is not None else (NOT_FOUND, None)
+                return OK, {"values": values[section]}
+            kind = args.get("type")
+            return OK, {"values": {k: v for k, v in values.items() if not kind or v[".type"] == kind}}
+        if func == "changes":
+            return OK, {"changes": {"network": [["staged"]]} if sid in self.staged else {}}
+        if func == "revert":
+            self.staged.pop(sid, None)
+            return OK, None
+        if func in ("set", "add", "delete"):
+            work = self.staged.setdefault(sid, {k: dict(v) for k, v in saved.items()})
+            values = args.get("values")
+            if func == "add":
+                kind = args.get("type")
+                if not isinstance(kind, str):
+                    return INVALID_ARGUMENT, None
+                name = args.get("name") if isinstance(args.get("name"), str) else self._new_section()
+                work[name] = {".type": kind, **(values if isinstance(values, dict) else {})}
+                return OK, {"section": name}
+            section = args.get("section")
+            if section not in work:
+                return NOT_FOUND, None
+            if func == "set":
+                if not isinstance(values, dict):
+                    return INVALID_ARGUMENT, None
+                work[section].update(values)
+            elif isinstance(args.get("option"), str):
+                work[section].pop(args["option"], None)
+            else:
+                del work[section]
+            return OK, None
+        if func == "apply":
+            rollback = args.get("rollback") is True
+            if self.pending and rollback:
+                return PERMISSION_DENIED, None
+            if self.pending:
+                return OK, None  # rpcd does nothing while an apply waits for confirmation
+            if sid not in self.staged:
+                return NO_DATA, None
+            if not self._uci_allowed("network", "write"):
+                return PERMISSION_DENIED, None
+            before = saved
+            self.network = self.staged.pop(sid)
+            if rollback:
+                timeout = args.get("timeout") if isinstance(args.get("timeout"), int) else APPLY_TIMEOUT
+                self.pending = (sid, before, snap.t + timeout)
+            self._reload()
+            return OK, None
+        if func == "confirm":
+            if not self.pending:
+                return NO_DATA, None
+            if self.pending[0] != sid:
+                return PERMISSION_DENIED, None
+            self.pending = None
+            return OK, None
+        if func == "rollback":
+            if not self.pending:
+                return NO_DATA, None
+            if self.pending[0] != sid:
+                return PERMISSION_DENIED, None
+            self._rollback()
+            return OK, None
+        return METHOD_NOT_FOUND, None
+
+    def _rollback(self) -> None:
+        assert self.pending is not None
+        self.network = self.pending[1]
+        self.pending = None
+        self._reload()
+
+    def _reload(self) -> None:
+        """netifd after `network reload`: a plain `config device` section with
+        enabled '0' takes its port down; every other physical port is up."""
+        off = {
+            sec.get("name")
+            for sec in (self.network or {}).values()
+            if sec[".type"] == "device"
+            and "type" not in sec
+            and str(sec.get("enabled", "1")) in ("0", "false", "off", "no")
+        }
+        n = self.ctx.world.d.node(self.node)
+        for p in PORTS:
+            n.ports[p].admin_up = p not in off
 
     # network.interface
 

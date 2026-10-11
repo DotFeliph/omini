@@ -20,6 +20,7 @@ import DeviceIcon from '@/components/DeviceIcon.vue'
 import NodeIcon from '@/components/NodeIcon.vue'
 import TrafficChart from '@/components/TrafficChart.vue'
 import DeviceExtras from '@/components/map/DeviceExtras.vue'
+import PanelSection from '@/components/map/PanelSection.vue'
 import PortPanel from '@/components/map/PortPanel.vue'
 import ResourceBars from '@/components/map/ResourceBars.vue'
 import { alertsState, alertText, sortAlerts } from '@/lib/alerts'
@@ -34,6 +35,7 @@ import { parseReasons } from '@/lib/reasons'
 import { formatRate, nodeFlow } from '@/lib/traffic'
 import { serviceName } from '@/lib/services'
 import type {
+  ConfigChange,
   Conversation,
   Integration,
   PresenceEvent,
@@ -109,6 +111,43 @@ async function loadActivity(id: string | undefined) {
   }
 }
 
+// Configuration changes made from Omini, and whether destructive ones are allowed.
+const history = ref<ConfigChange[]>([])
+const allowDestructive = ref(false)
+async function loadChanges(id: string | undefined) {
+  history.value = []
+  if (!id || !props.node?.changes?.length) return
+  try {
+    const [list, settings] = await Promise.all([api.configChanges(id), api.changeSettings()])
+    if (props.node?.id === id) {
+      history.value = list
+      allowDestructive.value = settings.allow_destructive
+    }
+  } catch {
+    // best effort
+  }
+}
+/** Why disabling each protected port is destructive, in words. */
+const guards = computed(() => {
+  const out: Record<string, string> = {}
+  for (const [port, p] of Object.entries(n.value?.protected ?? {})) {
+    const other = p.node ? byId.value.get(p.node) : undefined
+    const name = other ? displayName(other, t) : (p.node ?? '')
+    out[port] = t(`changes.reasons.${p.reason}`, { name })
+  }
+  return out
+})
+function changeText(c: ConfigChange) {
+  const port = (c.port && n.value?.port_labels?.[c.port]) || c.port || ''
+  const what =
+    c.after === false ? t('changes.portDisabled', { port }) : t('changes.portEnabled', { port })
+  return c.error ? `${what}: ${t('changes.failed', { error: c.error })}` : what
+}
+function afterChange() {
+  void loadChanges(n.value?.id)
+  emit('scanned') // the map reloads with the device as read after the change
+}
+
 // Who the node talks to (flow exports), when Omini receives them.
 const talks = ref<Conversation[]>([])
 async function loadTalks(id: string | undefined) {
@@ -137,6 +176,7 @@ watch(
     detectWeb(id, props.node?.ip)
     loadActivity(id)
     loadTalks(id)
+    loadChanges(id)
   },
   { immediate: true },
 )
@@ -348,6 +388,19 @@ const bandText = computed(() => {
   return [bandNames[node.band] ?? node.band, rate].filter(Boolean).join(' · ')
 })
 /** Traffic right now: internet (routers, firewalls, WAN nodes) or a Wi-Fi client's. */
+
+/** What a folded section says about itself. */
+const detailsSummary = computed(() => {
+  const keys = ['version', 'uptime']
+  const parts = summary.value.filter((s) => keys.includes(s.key)).map((s) => s.value)
+  return (parts.length ? parts : [n.value?.mac ?? '']).filter(Boolean).join(' · ')
+})
+const internetSummary = computed(() => {
+  if (!gateways.value.length) return ''
+  const bad = gateways.value.filter((g) => g.status !== 'up').length
+  return bad ? t('panel.gatewaysDown', { n: bad }) : t('panel.gatewayStatus.up')
+})
+
 const flow = computed(() => {
   const node = n.value
   if (!node) return undefined
@@ -648,8 +701,8 @@ async function save(patch: {
         <p v-if="n.kind === 'segment'" class="hint">{{ t('map.segmentHint') }}</p>
         <p v-if="n.kind === 'unmanaged'" class="hint">{{ t('map.unmanagedHint') }}</p>
 
-        <div v-if="summary.length || flow" class="tiles" data-test="summary">
-          <div v-if="flow" class="tile traffic" data-test="flow">
+        <div v-if="flow" class="tiles">
+          <div class="tile traffic" data-test="flow">
             <span class="tile-label">{{
               n.flow ? t('panel.trafficNow') : t('panel.internetNow')
             }}</span>
@@ -658,31 +711,7 @@ async function save(patch: {
               <span class="up"><ArrowUp :size="13" />{{ formatRate(flow.up) }}</span>
             </span>
           </div>
-          <div
-            v-for="s in summary"
-            :key="s.key"
-            class="tile"
-            :class="s.tone"
-            :title="s.hint"
-            :data-test="`tile-${s.key}`"
-          >
-            <span class="tile-label">{{ s.label }}</span>
-            <span class="tile-value">{{ s.value }}</span>
-            <span v-if="s.hint && s.key === 'updates' && s.tone !== 'muted'" class="tile-hint">{{
-              s.hint
-            }}</span>
-          </div>
         </div>
-
-        <ResourceBars
-          :cpu="n.device?.cpu_pct"
-          :memory="n.device?.mem_pct"
-          :cpu-count="n.device?.cpu_count"
-          :mem-used="n.device?.mem_used_bytes"
-          :mem-total="n.device?.mem_total_bytes"
-          :swap="n.device?.swap_pct"
-          :storage="n.device?.storage"
-        />
 
         <section v-if="nodeAlerts.length" class="block" data-test="node-alerts">
           <h3>{{ t('insights.nodeAlerts') }}</h3>
@@ -698,13 +727,13 @@ async function save(patch: {
           </ul>
         </section>
 
-        <section v-if="chart" class="block" data-test="node-traffic">
-          <h3>{{ t('traffic.title') }}</h3>
-          <TrafficChart :node="chart.node" :iface="chart.iface" />
-        </section>
-
-        <section v-if="n.kind === 'device'" class="block" data-test="ports-section">
-          <h3>{{ t('panel.ports') }}</h3>
+        <PanelSection
+          v-if="n.kind === 'device'"
+          id="ports"
+          fixed
+          :title="t('panel.ports')"
+          data-test="ports-section"
+        >
           <p v-if="!physicalPorts.length" class="muted">{{ t('panel.noPorts') }}</p>
           <PortPanel
             v-if="physicalPorts.length"
@@ -712,15 +741,58 @@ async function save(patch: {
             :links="portLinks"
             :labels="n.port_labels"
             :node-id="n.id"
-            @select="(id) => emit('select', id)"
+            :changes="n.changes"
+            :guards="guards"
+            :allow-destructive="allowDestructive"
             @label="savePort"
+            @applied="afterChange"
           />
-        </section>
+        </PanelSection>
+
+        <PanelSection
+          v-if="children.length"
+          id="clients"
+          fixed
+          :title="`${t('panel.clients')} (${children.length})`"
+        >
+          <ul class="client-list">
+            <li v-for="c in shownChildren" :key="c.id" @click="emit('select', c.id)">
+              <span class="dot" :class="{ online: c.online }" />
+              <DeviceIcon :device="c" :size="15" />
+              <span class="grow">{{ displayName(c, t) }}</span>
+              <span class="muted mono">{{ c.ip }}</span>
+            </li>
+          </ul>
+          <button
+            v-if="children.length > CLIENTS_SHOWN"
+            class="link more"
+            type="button"
+            data-test="more-clients"
+            @click="allClients = !allClients"
+          >
+            {{ allClients ? t('panel.showLess') : t('panel.showAll', { n: children.length }) }}
+          </button>
+        </PanelSection>
+
+        <PanelSection
+          v-if="chart"
+          id="traffic"
+          :title="t('traffic.title')"
+          data-test="node-traffic"
+        >
+          <template #default="{ open }">
+            <TrafficChart v-if="open" :node="chart.node" :iface="chart.iface" />
+          </template>
+        </PanelSection>
 
         <DeviceExtras v-if="n.device" :device="n.device" />
 
-        <section v-if="n.wan || gateways.length" class="block">
-          <h3>{{ t('panel.internet') }}</h3>
+        <PanelSection
+          v-if="n.wan || gateways.length"
+          id="internet"
+          :title="t('panel.internet')"
+          :summary="internetSummary"
+        >
           <dl v-if="n.wan" class="facts" data-test="wan">
             <dt>{{ t('panel.interface') }}</dt>
             <dd class="mono">
@@ -748,31 +820,14 @@ async function save(patch: {
               </span>
             </li>
           </ul>
-        </section>
+        </PanelSection>
 
-        <section v-if="children.length" class="block">
-          <h3>{{ t('panel.clients') }} ({{ children.length }})</h3>
-          <ul class="client-list">
-            <li v-for="c in shownChildren" :key="c.id" @click="emit('select', c.id)">
-              <span class="dot" :class="{ online: c.online }" />
-              <DeviceIcon :device="c" :size="15" />
-              <span class="grow">{{ displayName(c, t) }}</span>
-              <span class="muted mono">{{ c.ip }}</span>
-            </li>
-          </ul>
-          <button
-            v-if="children.length > CLIENTS_SHOWN"
-            class="link more"
-            type="button"
-            data-test="more-clients"
-            @click="allClients = !allClients"
-          >
-            {{ allClients ? t('panel.showLess') : t('panel.showAll', { n: children.length }) }}
-          </button>
-        </section>
-
-        <section v-if="talks.length" class="block" data-test="node-talks">
-          <h3>{{ t('flows.talksTo') }}</h3>
+        <PanelSection
+          v-if="talks.length"
+          id="talks"
+          :title="t('flows.talksTo')"
+          data-test="node-talks"
+        >
           <ul class="talks">
             <li v-for="c in talks" :key="c.a + c.b">
               <button
@@ -795,10 +850,31 @@ async function save(patch: {
           <RouterLink class="link small" :to="{ path: '/flows', query: { node: n.id } }">{{
             t('flows.allFlows')
           }}</RouterLink>
-        </section>
+        </PanelSection>
 
-        <section v-if="activity.length" class="block" data-test="node-activity">
-          <h3>{{ t('insights.activity') }}</h3>
+        <PanelSection
+          v-if="n.changes?.length"
+          id="changes"
+          :title="t('changes.history')"
+          :summary="history.length ? String(history.length) : ''"
+          data-test="node-changes"
+        >
+          <ul v-if="history.length" class="activity">
+            <li v-for="c in history.slice(0, 8)" :key="c.id" :class="{ failed: !!c.error }">
+              <span class="dot" />
+              <span class="grow">{{ changeText(c) }}</span>
+              <span class="muted mono">{{ activityTime.format(new Date(c.at)) }}</span>
+            </li>
+          </ul>
+          <p v-else class="muted small">{{ t('changes.historyEmpty') }}</p>
+        </PanelSection>
+
+        <PanelSection
+          v-if="activity.length"
+          id="activity"
+          :title="t('insights.activity')"
+          data-test="node-activity"
+        >
           <ul class="activity">
             <li v-for="e in activity" :key="e.id" :class="e.first ? 'first' : e.kind">
               <span class="dot" />
@@ -812,10 +888,36 @@ async function save(patch: {
               <span class="muted mono">{{ activityTime.format(new Date(e.at)) }}</span>
             </li>
           </ul>
-        </section>
+        </PanelSection>
 
-        <section class="block">
-          <h3>{{ t('panel.details') }}</h3>
+        <PanelSection id="details" :title="t('panel.details')" :summary="detailsSummary">
+          <div v-if="summary.length" class="tiles" data-test="summary">
+            <div
+              v-for="s in summary"
+              :key="s.key"
+              class="tile"
+              :class="s.tone"
+              :title="s.hint"
+              :data-test="`tile-${s.key}`"
+            >
+              <span class="tile-label">{{ s.label }}</span>
+              <span class="tile-value">{{ s.value }}</span>
+              <span v-if="s.hint && s.key === 'updates' && s.tone !== 'muted'" class="tile-hint">{{
+                s.hint
+              }}</span>
+            </div>
+          </div>
+
+          <ResourceBars
+            :cpu="n.device?.cpu_pct"
+            :memory="n.device?.mem_pct"
+            :cpu-count="n.device?.cpu_count"
+            :mem-used="n.device?.mem_used_bytes"
+            :mem-total="n.device?.mem_total_bytes"
+            :swap="n.device?.swap_pct"
+            :storage="n.device?.storage"
+          />
+
           <dl class="facts">
             <template v-if="n.ip"
               ><dt>{{ t('panel.ip') }}</dt>
@@ -884,10 +986,15 @@ async function save(patch: {
               </dd>
             </template>
           </dl>
-        </section>
+        </PanelSection>
 
-        <section v-if="n.kind !== 'segment' && n.kind !== 'app'" class="block classification">
-          <h3>{{ t('panel.classification') }}</h3>
+        <PanelSection
+          v-if="n.kind !== 'segment' && n.kind !== 'app'"
+          id="identification"
+          :title="t('panel.classification')"
+          :summary="roleLabel"
+          class="classification"
+        >
           <form v-if="classifying" class="classify-form" @submit.prevent="saveClassification">
             <label class="field">
               <span>{{ t('panel.changeType') }}</span>
@@ -948,7 +1055,7 @@ async function save(patch: {
               </span>
             </div>
           </template>
-        </section>
+        </PanelSection>
 
         <footer v-if="n.kind !== 'app'" class="manage">
           <button
@@ -1057,6 +1164,9 @@ async function save(patch: {
 }
 .activity .first .dot {
   background: var(--accent);
+}
+.activity .failed .dot {
+  background: var(--danger);
 }
 .spin {
   animation: spin 1.2s linear infinite;
@@ -1197,11 +1307,11 @@ header {
   width: 26px;
   height: 26px;
   flex: none;
-  opacity: 0;
+  color: var(--text-muted);
 }
-.name-row:hover .name-action,
+.name-action:hover,
 .name-action:focus-visible {
-  opacity: 0.8;
+  color: var(--text);
 }
 .tiles {
   display: grid;

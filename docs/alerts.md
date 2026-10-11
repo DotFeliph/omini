@@ -58,6 +58,11 @@ attention) and **info** (worth knowing).
 | Rule | Severity | Opens when |
 |---|---|---|
 | `duplicate_ip` | warning | Two online devices with different MAC addresses use the same IP |
+| `dhcp_no_offer` | critical | The network scan asked for an address and no DHCP server answered |
+| `dhcp_rogue` | critical | A second DHCP server answered that is not a router or a device known to serve DHCP |
+| `dns_down` | critical | A DNS server of the network does not resolve the internet name of the check |
+| `dns_slow` | warning | A DNS server took more than 500 ms to answer |
+| `dns_local` | warning | A DNS server resolves the internet name but not a local one |
 | `insecure_service` | warning | Telnet (23) or FTP (21) is open on a device, or a network device's admin page is served only over plain HTTP (no 443 or 8443) |
 | `new_devices_burst` | warning | 5 or more devices never seen before appeared within 10 minutes |
 | `new_device` | info | A device is seen for the first time. Shown for 24 hours. Devices found in the first 15 minutes after Omini started tracking are the existing network, not new |
@@ -141,7 +146,9 @@ Each channel has:
 
 - **Send alerts from**: critical only, warning and critical (the default), or
   everything.
-- **Also tell when an alert is resolved** (on by default).
+- **Also tell when an alert is resolved** (on by default). Events (a device
+  restarted, new devices joined) are told when they happen, never as
+  resolved: their alert just ends after a while.
 - An on/off switch, **Send a test**, and when it last sent (or its last error).
 
 Secrets (bot tokens, SMTP passwords, signing secrets) are encrypted in the

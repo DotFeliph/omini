@@ -228,3 +228,23 @@ def test_firmware_upgrade(run: dict[str, Any]) -> None:
 def test_tunnel_down_and_wrong_secret(run: dict[str, Any]) -> None:
     assert "error" in run["down"] and not run["down"].get("devices")
     assert "rejected the client ID or secret" in run["bad"]["error"]
+
+
+def test_disable_and_enable_a_port() -> None:
+    with Emulator(at=TUE, apis=["omada"], world=World()) as emu:
+        sw = devices(emu.collect("omada"))["br-sw01"]
+        assert all(i["enabled"] for i in sw["interfaces"])
+        change = {"device": sw["key"], "kind": "port.enabled", "port": "Port 20", "value": False}
+        p20 = iface(devices(emu.collect("omada", "apply", change=change))["br-sw01"], "Port 20")
+        assert (p20["enabled"], p20["up"]) == (False, False)  # the printer there drops
+        assert iface(devices(emu.collect("omada"))["br-sw01"], "Port 20")["enabled"] is False
+
+        change["value"] = True
+        p20 = iface(devices(emu.collect("omada", "apply", change=change))["br-sw01"], "Port 20")
+        assert p20["enabled"] is True and p20["up"] is True
+        assert all(i["enabled"] for i in devices(emu.collect("omada"))["br-sw01"]["interfaces"])
+
+        # Only switch ports: an access point's port is refused, nothing changes.
+        ap = devices(emu.collect("omada"))["br-ap01"]
+        bad = {"device": ap["key"], "kind": "port.enabled", "port": "ETH1", "value": False}
+        assert "only switch ports" in emu.collect("omada", "apply", change=bad)["error"]

@@ -115,9 +115,22 @@ type Node struct {
 	Reasons []string `json:"reasons,omitempty"`
 	Icon    string   `json:"icon,omitempty"` // logo chosen by the user (overrides product/OS/brand)
 
+	// Configuration changes its integration can apply, and the ports whose
+	// disabling would cut Omini or other gear off (set by the collector).
+	Changes   []model.ChangeKind    `json:"changes,omitempty"`
+	Protected map[string]Protection `json:"protected,omitempty"`
+
 	Pinned   bool       `json:"pinned,omitempty"`    // pinned by the user: never collapsed
 	Hidden   bool       `json:"hidden,omitempty"`    // hidden from the map by the user
 	LastSeen *time.Time `json:"last_seen,omitempty"` // offline nodes: when they were last present
+}
+
+// Protection is why disabling a port is destructive: Reason is "omini" (Omini
+// reaches the device through it), "uplink" (the device's way to the rest of
+// the network) or "gear" (other network gear hangs from it: Node).
+type Protection struct {
+	Reason string `json:"reason"`
+	Node   string `json:"node,omitempty"`
 }
 
 // WebApp is a web interface on a node; App is the recognized application
@@ -146,6 +159,10 @@ type Topology struct {
 	// point's client list, alone on a switch port), by MAC — to remember
 	// (Options.Attached).
 	Attached map[model.MACAddress]Attachment `json:"-"`
+	// The network scan's DHCP and DNS checks, from every source (a device that
+	// holds them may be merged into another or dropped from the map).
+	DhcpChecks []model.DhcpCheck `json:"dhcp_checks,omitempty"`
+	DnsChecks  []model.DnsCheck  `json:"dns_checks,omitempty"`
 }
 
 // Attachment is where a client was last seen for sure: the access point it
@@ -269,7 +286,14 @@ func BuildWith(sources []Source, opts Options) Topology {
 	b.sharedPorts()
 	b.fillDirectLinkSpeeds()
 	b.dropEmptyNetworks()
-	return b.result()
+	t := b.result()
+	for _, src := range sources {
+		for _, d := range src.Devices {
+			t.DhcpChecks = append(t.DhcpChecks, d.DhcpChecks...)
+			t.DnsChecks = append(t.DnsChecks, d.DnsChecks...)
+		}
+	}
+	return t
 }
 
 // dropEmptyNetworks removes devices that only stand for a scanned network (no
@@ -365,9 +389,6 @@ func (b *builder) adoptMACs(sources []Source) {
 	for _, src := range sources {
 		for i := range src.Devices {
 			d := &src.Devices[i]
-			for _, a := range d.Arp {
-				add(a.IP, a.MAC)
-			}
 			for _, l := range d.DhcpLeases {
 				add(l.IP, l.MAC)
 			}
@@ -375,6 +396,15 @@ func (b *builder) adoptMACs(sources []Source) {
 				if h.MAC != nil {
 					add(h.IP, *h.MAC)
 				}
+			}
+		}
+	}
+	// ARP last: a machine with two interfaces may answer for either address
+	// from either one (see ownIP).
+	for _, src := range sources {
+		for i := range src.Devices {
+			for _, a := range src.Devices[i].Arp {
+				add(a.IP, a.MAC)
 			}
 		}
 	}
@@ -1008,6 +1038,10 @@ func (b *builder) placeCollected(
 			enrich(b.nodes[id], hs.h)
 		}
 	}
+	leased := map[string]model.MACAddress{} // address -> the MAC its lease is for
+	for m, ip := range leaseIPs {
+		leased[ip] = m
+	}
 	// A known node without an address takes the one its MAC has (a VM reported
 	// without its IPs, seen by the scan or in ARP): one node, all it is known by.
 	for m, id := range b.byMAC {
@@ -1015,11 +1049,7 @@ func (b *builder) placeCollected(
 		if n == nil || n.IP != "" {
 			continue
 		}
-		ip := hostsByMAC[m].h.IP
-		if ip == "" {
-			ip = arp[m].ip
-		}
-		if ip != "" {
+		if ip := ownIP(m, leaseIPs, leased, hostsByMAC[m].h.IP, arp[m].ip); ip != "" {
 			n.IP = ip
 			if _, taken := b.byIP[ip]; !taken {
 				b.byIP[ip] = id
@@ -1063,7 +1093,7 @@ func (b *builder) placeCollected(
 			ID: "mac:" + string(m), Kind: KindClient, Role: "client", Online: true, MAC: string(m),
 			RandomMAC: m.IsRandomized(), Hostname: hostnames[m],
 		}
-		n.IP = firstNonEmpty(arp[m].ip, hs.h.IP, leaseIPs[m])
+		n.IP = ownIP(m, leaseIPs, leased, arp[m].ip, hs.h.IP, leaseIPs[m])
 		if scanned {
 			enrich(n, hs.h)
 		}
@@ -1579,6 +1609,25 @@ func (b *builder) sortedIDs(kind NodeKind) []string {
 	}
 	sort.Strings(ids)
 	return ids
+}
+
+// ownIP is the first of the addresses seen for a MAC, skipping one leased to
+// another MAC while this MAC has a lease of its own. A machine with two
+// interfaces on one network (Wi-Fi and cable) answers ARP for both of its
+// addresses from either interface (Linux "ARP flux"), so ARP alone would give
+// both interfaces the same address. A MAC without a lease (a static address
+// inside the pool) keeps what ARP says: that is a real duplicate.
+func ownIP(m model.MACAddress, leaseIPs map[model.MACAddress]string, leased map[string]model.MACAddress, ips ...string) string {
+	for _, ip := range ips {
+		if ip == "" {
+			continue
+		}
+		if owner, ok := leased[ip]; ok && owner != m && leaseIPs[m] != "" {
+			continue
+		}
+		return ip
+	}
+	return ""
 }
 
 func firstNonEmpty(values ...string) string {

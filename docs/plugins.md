@@ -24,9 +24,10 @@ code.
 
 ## Rules
 
-1. **Read-only.** Never send a request that changes the device's
-   configuration, reboots it or starts a check. A `POST` is acceptable only for
-   a login or a read that needs it, and must be documented in the README.
+1. **Changes only through `apply`.** `collect` and `test` never change the
+   device, reboot it or start a check (a `POST` only for a login or a read
+   that needs it, documented in the README). A plugin changes a device only
+   in `apply`, for the changes its manifest declares.
 2. **Optional data never fails the collection.** Try optional endpoints and
    skip them on error. Fail only when the essential data cannot be read.
 3. **Short timeouts** on every request (about 5 to 10 seconds).
@@ -99,6 +100,8 @@ description: >-
   Example routers through their REST API: ports, ARP, DHCP leases. Read-only.
 author: Your Name
 homepage: https://github.com/you/omini-plugin-example
+changes:                    # optional: the changes `apply` supports
+  - port.enabled            # enable or disable a port
 fields:                     # the "add integration" form
   - key: url
     type: url
@@ -214,11 +217,12 @@ if __name__ == "__main__":
 |---|---|
 | `plugin.collect` | Decorator for the function that returns the devices (a list of `Device`, or dicts with the same shape) |
 | `plugin.test` | Decorator for the connection test; returns a short message for the user |
+| `plugin.apply` | Decorator for the function that applies a change declared under `changes` in the manifest: `apply(cfg, change)` with `change.device`, `change.kind`, `change.port` and `change.value`. Apply it, read the device again to check it took effect, save it to the startup configuration only then, and return the device as read after the change |
 | `plugin.run()` | Reads the request, runs the action, prints the answer and exits |
 | `PluginError("...")` | An error the user should read: wrong key, host unreachable, missing permission. Any other exception becomes "unexpected error", with the traceback in Omini's log |
 | `Config` | The `cfg` argument: a dict of the form values, with `cfg.str(key, default)`, `cfg.bool(key, default)`, `cfg.int(key, default)` and `cfg.state_dir` |
 | `log` | A `logging` logger that writes to stderr (shown in Omini's log at debug level) |
-| Models | `Device`, `Interface`, `Neighbor`, `FdbEntry`, `ArpEntry`, `DhcpLease`, `WirelessClient`, `Gateway`, `Firmware`, `Storage`, `Temperature`, `Transceiver`, `PortVlans`, `Vlan`, `Service`, `VpnPeer`, `DhcpPool`, `FirewallStates`, `Host` |
+| Models | `Change`, `Device`, `Interface`, `Neighbor`, `FdbEntry`, `ArpEntry`, `DhcpLease`, `WirelessClient`, `Gateway`, `Firmware`, `Storage`, `Temperature`, `Transceiver`, `PortVlans`, `Vlan`, `Service`, `VpnPeer`, `DhcpPool`, `FirewallStates`, `Host` |
 
 The models are pydantic classes generated from Omini's JSON Schema
 (`schema/omini.schema.json`), so invalid data is caught before it reaches
@@ -286,7 +290,18 @@ run:
     "state_dir": "/data/plugins/example/state/7"}
    ```
 
-   `action` is `collect` or `test`.
+   `action` is `collect`, `test` or `apply`. An `apply` request also carries
+   the change, one of those the manifest declares under `changes`:
+
+   ```json
+   {"protocol": 1, "action": "apply", "config": {"...": "..."},
+    "change": {"device": "1c:2a:a3:2f:57:f7", "kind": "port.enabled",
+               "port": "Port 5", "value": false}}
+   ```
+
+   The plugin applies it, reads the device again to check that it took
+   effect, saves it to the startup configuration only then, and answers with
+   the device as read after the change (`{"devices": [...]}`), or an error.
 3. The plugin writes one JSON response on stdout, exactly one of:
 
    ```json

@@ -1,17 +1,19 @@
 <script setup lang="ts">
-import { Check, ExternalLink, Pencil, X } from 'lucide-vue-next'
-import { computed, ref } from 'vue'
+import { Check, Pencil, Power, PowerOff, ShieldAlert, X } from 'lucide-vue-next'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import TrafficChart from '@/components/TrafficChart.vue'
+import { api, ApiError } from '@/lib/api'
 import { formatBytes, formatSpeed } from '@/lib/format'
 import { speedColor, speedTier, SPEED_TIERS } from '@/lib/speed'
-import type { Interface, TopoNode } from '@/lib/types'
+import type { ChangeKind, Interface, TopoNode } from '@/lib/types'
 
 /**
  * Front view of a device: one RJ45 port per physical interface, colored by
- * link speed (empty when down). Hover or focus a port for its details; click
- * it to open what is connected to it.
+ * link speed (empty when down, struck through when disabled). Hover or focus
+ * a port for its details; click it for its card: rename it, enable or disable
+ * it. What is connected opens from the panel's list of connected devices.
  */
 const props = defineProps<{
   ports: Interface[]
@@ -21,11 +23,18 @@ const props = defineProps<{
   labels?: Record<string, string>
   /** The device: its ports' traffic history is shown in their card. */
   nodeId?: string
+  /** Changes the device applies (port.enabled: enable or disable a port). */
+  changes?: ChangeKind[]
+  /** Why disabling a port is destructive, already in words, by port name. */
+  guards?: Record<string, string>
+  /** Destructive changes are allowed (Settings): asked twice instead of blocked. */
+  allowDestructive?: boolean
 }>()
 const emit = defineEmits<{
-  select: [id: string]
   /** Rename a port (empty: back to the device's own name). */
   label: [port: string, label: string]
+  /** A change was applied: the map reloads. */
+  applied: []
 }>()
 const { t } = useI18n()
 
@@ -68,9 +77,51 @@ function saveName(p: Interface) {
   emit('label', p.name, draft.value.trim())
   naming.value = false
 }
-function openLinked(p: Interface) {
-  const other = props.links[p.name]
-  if (other) emit('select', other.id)
+
+// Enabling or disabling a port: one short confirmation; a destructive one is
+// blocked, or (when allowed in Settings) asked a second time.
+const canToggle = computed(() => !!props.nodeId && !!props.changes?.includes('port.enabled'))
+const step = ref<'' | 'confirm' | 'again'>('')
+const busy = ref(false)
+const changeError = ref('')
+watch(selected, () => {
+  step.value = ''
+  changeError.value = ''
+})
+const disabled = (p: Interface) => p.enabled === false
+/** Why disabling this port is not allowed (blocked), or '' when it may be done. */
+function blockedWhy(p: Interface) {
+  const why = props.guards?.[p.name]
+  return !disabled(p) && why && !props.allowDestructive ? why : ''
+}
+function confirmText(p: Interface) {
+  const port = props.labels?.[p.name] || p.name
+  if (disabled(p)) return t('changes.confirmEnable', { port })
+  const who = props.links[p.name]?.label
+  return who ? t('changes.confirmDisableOf', { port, who }) : t('changes.confirmDisable', { port })
+}
+async function confirmToggle(p: Interface) {
+  const value = disabled(p)
+  if (!value && props.guards?.[p.name] && step.value === 'confirm') {
+    step.value = 'again'
+    return
+  }
+  busy.value = true
+  changeError.value = ''
+  try {
+    await api.applyChange(props.nodeId!, {
+      kind: 'port.enabled',
+      port: p.name,
+      value,
+      confirm: step.value === 'again',
+    })
+    step.value = ''
+    emit('applied')
+  } catch (e) {
+    changeError.value = e instanceof ApiError ? e.message : t('common.error')
+  } finally {
+    busy.value = false
+  }
 }
 
 /** What a port's tooltip and card list. */
@@ -79,7 +130,7 @@ function details(p: Interface) {
   out.push({
     key: 'status',
     label: t('panel.status'),
-    value: p.up ? portStatus(p) : t('panel.portDown'),
+    value: disabled(p) ? t('changes.disabled') : p.up ? portStatus(p) : t('panel.portDown'),
   })
   if (p.connector)
     out.push({ key: 'connector', label: t('panel.connector'), value: connectorName(p) })
@@ -170,10 +221,15 @@ function shortName(name: string) {
           :key="p.name"
           type="button"
           class="port"
-          :class="{ up: p.up, linked: !!links[p.name], selected: selected === p.name }"
+          :class="{
+            up: p.up && !disabled(p),
+            off: disabled(p),
+            linked: !!links[p.name],
+            selected: selected === p.name,
+          }"
           :style="{ '--c': p.up ? speedColor(p.speed_mbps) : undefined }"
           :data-port="p.name"
-          :aria-label="`${p.name}: ${p.up ? formatSpeed(p.speed_mbps) || t('panel.portUp') : t('panel.portDown')}`"
+          :aria-label="`${p.name}: ${details(p)[0]?.value}`"
           :aria-pressed="selected === p.name"
           @mouseenter="!selected && show(p, $event)"
           @mouseleave="hovered = undefined"
@@ -202,11 +258,17 @@ function shortName(name: string) {
               height="5"
             />
           </svg>
+          <!-- Disabled in the configuration: struck through. -->
+          <svg v-if="disabled(p)" viewBox="0 0 36 30" aria-hidden="true" class="strike">
+            <path d="M5 26L31 4" />
+          </svg>
           <span class="led" />
           <span class="name" :title="labels?.[p.name] ? `${labels[p.name]} (${p.name})` : p.name">{{
             labels?.[p.name] || shortName(p.name)
           }}</span>
-          <span class="speed">{{ p.up ? formatSpeed(p.speed_mbps) || '·' : '—' }}</span>
+          <span class="speed">{{
+            p.up && !disabled(p) ? formatSpeed(p.speed_mbps) || '·' : '—'
+          }}</span>
         </button>
       </div>
     </div>
@@ -223,6 +285,10 @@ function shortName(name: string) {
       <span class="chip">
         <span class="swatch off" />
         {{ t('panel.portDown') }}
+      </span>
+      <span v-if="ports.some(disabled)" class="chip">
+        <span class="swatch off struck" />
+        {{ t('changes.disabled') }}
       </span>
     </div>
 
@@ -254,6 +320,7 @@ function shortName(name: string) {
       <header>
         <span
           class="dot"
+          :class="{ off: disabled(current) }"
           :style="{ background: current.up ? speedColor(current.speed_mbps) : undefined }"
         />
         <form v-if="naming" class="name-form" @submit.prevent="saveName(current)">
@@ -272,8 +339,18 @@ function shortName(name: string) {
           </button>
         </form>
         <template v-else>
-          <strong>{{ labels?.[current.name] || current.name }}</strong>
+          <strong class="port-name">{{ labels?.[current.name] || current.name }}</strong>
           <span v-if="labels?.[current.name]" class="muted mono">{{ current.name }}</span>
+          <button
+            class="btn ghost icon rename"
+            type="button"
+            data-test="edit-port"
+            :title="t('panel.portLabel')"
+            :aria-label="t('panel.portLabel')"
+            @click="startNaming(current)"
+          >
+            <Pencil :size="13" />
+          </button>
         </template>
         <button
           class="btn ghost icon close"
@@ -290,28 +367,59 @@ function shortName(name: string) {
           <dd :class="{ mono: d.mono, err: d.err }">{{ d.value }}</dd>
         </template>
       </dl>
-      <div class="card-actions">
+
+      <template v-if="canToggle && current.enabled !== undefined">
+        <div v-if="step" class="confirm" :class="{ danger: step === 'again' }">
+          <p>
+            {{
+              step === 'again'
+                ? t('changes.askAgain', { why: guards?.[current.name] })
+                : confirmText(current)
+            }}
+          </p>
+          <div class="confirm-actions">
+            <button class="btn small ghost" type="button" :disabled="busy" @click="step = ''">
+              {{ t('changes.cancel') }}
+            </button>
+            <button
+              class="btn small"
+              :class="step === 'again' ? 'danger' : 'primary'"
+              type="button"
+              data-test="confirm-toggle"
+              :disabled="busy"
+              @click="confirmToggle(current)"
+            >
+              {{
+                busy
+                  ? t('changes.applying')
+                  : step === 'again'
+                    ? t('changes.again')
+                    : disabled(current)
+                      ? t('changes.enable')
+                      : t('changes.disable')
+              }}
+            </button>
+          </div>
+        </div>
         <button
-          v-if="!naming"
-          class="btn small"
+          v-else
+          class="btn toggle"
+          :class="{ primary: disabled(current) }"
           type="button"
-          data-test="edit-port"
-          @click="startNaming(current)"
+          data-test="toggle-port"
+          :disabled="!!blockedWhy(current)"
+          @click="step = 'confirm'"
         >
-          <Pencil :size="13" />{{ t('panel.portLabel') }}
+          <component :is="disabled(current) ? Power : PowerOff" :size="15" />
+          {{ disabled(current) ? t('changes.enable') : t('changes.disable') }}
         </button>
-        <button
-          v-if="links[current.name]"
-          class="btn small"
-          type="button"
-          data-test="open-linked"
-          @click="openLinked(current)"
-        >
-          <ExternalLink :size="13" />{{
-            t('panel.openLinked', { name: links[current.name]!.label })
-          }}
-        </button>
-      </div>
+        <p v-if="!step && blockedWhy(current)" class="blocked" data-test="blocked">
+          <ShieldAlert :size="13" />
+          {{ t('changes.blocked', { why: blockedWhy(current) }) }}
+        </p>
+        <p v-if="changeError" class="change-error" role="alert">{{ changeError }}</p>
+      </template>
+
       <div v-if="nodeId && current.rx_bytes !== undefined" class="port-traffic">
         <h4>{{ t('traffic.title') }}</h4>
         <TrafficChart :node="nodeId" :iface="current.name" />
@@ -420,16 +528,87 @@ function shortName(name: string) {
   padding: 3px 6px;
   font-size: 12.5px;
 }
-.card-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+.confirm {
   margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
 }
-.card-actions .btn {
-  display: inline-flex;
+.confirm.danger {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+}
+.confirm p {
+  margin: 0 0 8px;
+}
+.confirm-actions {
+  display: flex;
+  gap: 6px;
+}
+.blocked,
+.change-error {
+  margin: 10px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.change-error {
+  color: var(--danger);
+}
+.port.off {
+  color: var(--text-muted);
+}
+.strike {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  width: 100%;
+  max-width: 44px;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.strike path {
+  stroke: var(--text-muted);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+}
+.swatch.struck {
+  background: linear-gradient(
+    to top right,
+    transparent 44%,
+    var(--text-muted) 44% 56%,
+    transparent 56%
+  );
+}
+.port-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rename {
+  width: 24px;
+  height: 24px;
+  color: var(--text-muted);
+}
+.btn.toggle {
+  display: flex;
   align-items: center;
-  gap: 5px;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 12px;
+}
+.blocked {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+}
+.blocked svg {
+  flex: none;
+  margin-top: 1px;
+}
+.confirm-actions {
+  justify-content: flex-end;
 }
 .jack {
   fill: var(--bg-sunken);

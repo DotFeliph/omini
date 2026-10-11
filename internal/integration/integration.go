@@ -29,6 +29,8 @@ type Info struct {
 	// Single types can be added only once (e.g. the network scan).
 	Single bool              `json:"single,omitempty"`
 	Fields []model.FormField `json:"fields"`
+	// Changes it can apply to its devices (see Applier).
+	Changes []model.ChangeKind `json:"changes,omitempty"`
 }
 
 // Config is the user-provided configuration of one integration instance:
@@ -61,7 +63,7 @@ func (c Config) Int(key string, def int) int {
 }
 
 // Integration reads data from a device, controller or piece of software.
-// Implementations must be read-only: they never change device configuration.
+// Collect and Test never change a device; only an Applier does, in Apply.
 type Integration interface {
 	Info() Info
 	// Collect returns a snapshot of every device reachable through this
@@ -70,6 +72,14 @@ type Integration interface {
 	Collect(ctx context.Context, cfg Config) ([]model.Device, error)
 	// Test checks connectivity and credentials, returning a short message.
 	Test(ctx context.Context, cfg Config) (string, error)
+}
+
+// Applier is an integration that changes its devices' configuration, for the
+// kinds its Info lists in Changes. Apply applies the change, reads the device
+// again to check it took effect, saves it to the startup configuration only
+// then, and returns the devices as read after the change.
+type Applier interface {
+	Apply(ctx context.Context, cfg Config, change model.Change) ([]model.Device, error)
 }
 
 type forceKey struct{}

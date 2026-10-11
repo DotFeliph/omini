@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
+import PanelSection from '@/components/map/PanelSection.vue'
 import { formatAgo, formatBytes } from '@/lib/format'
 import type { Device } from '@/lib/types'
 
@@ -29,8 +30,13 @@ const tone = (p?: number) => (p === undefined ? '' : p >= 90 ? 'bad' : p >= 75 ?
 </script>
 
 <template>
-  <section v-if="d.firewall_states || d.dhcp_pools?.length" class="block" data-test="usage">
-    <h3>{{ t('panel.usage') }}</h3>
+  <PanelSection
+    v-if="d.firewall_states || d.dhcp_pools?.length"
+    id="usage"
+    :title="t('panel.usage')"
+    :summary="statesPct !== undefined ? `${statesPct}%` : ''"
+    data-test="usage"
+  >
     <div v-if="d.firewall_states" class="bar-row" data-test="fw-states">
       <span class="grow">{{ t('panel.firewallStates') }}</span>
       <span class="mono">
@@ -54,10 +60,15 @@ const tone = (p?: number) => (p === undefined ? '' : p >= 90 ? 'bad' : p >= 75 ?
         <i :style="{ width: `${pct(p.used, p.total)}%` }" />
       </span>
     </div>
-  </section>
+  </PanelSection>
 
-  <section v-if="d.vlans?.length" class="block" data-test="vlans">
-    <h3>VLANs ({{ d.vlans.length }})</h3>
+  <PanelSection
+    v-if="d.vlans?.length"
+    id="vlans"
+    title="VLANs"
+    :summary="String(d.vlans.length)"
+    data-test="vlans"
+  >
     <ul class="rows">
       <li v-for="v in d.vlans" :key="v.id">
         <span class="tag mono">{{ v.id }}</span>
@@ -65,10 +76,15 @@ const tone = (p?: number) => (p === undefined ? '' : p >= 90 ? 'bad' : p >= 75 ?
         <span class="muted mono">{{ [v.interface, v.subnet].filter(Boolean).join(' · ') }}</span>
       </li>
     </ul>
-  </section>
+  </PanelSection>
 
-  <section v-if="d.vpn_peers?.length" class="block" data-test="vpn">
-    <h3>{{ t('panel.vpn') }} ({{ d.vpn_peers.length }})</h3>
+  <PanelSection
+    v-if="d.vpn_peers?.length"
+    id="vpn"
+    :title="t('panel.vpn')"
+    :summary="String(d.vpn_peers.length)"
+    data-test="vpn"
+  >
     <ul class="rows">
       <li v-for="p in d.vpn_peers" :key="`${p.protocol}|${p.name}`">
         <span class="dot" :class="{ online: p.connected }" />
@@ -85,13 +101,15 @@ const tone = (p?: number) => (p === undefined ? '' : p >= 90 ? 'bad' : p >= 75 ?
         </span>
       </li>
     </ul>
-  </section>
+  </PanelSection>
 
-  <section v-if="services.length" class="block" data-test="services">
-    <h3>
-      {{ t('panel.services') }} ({{ services.length }})
-      <span v-if="stopped" class="stopped">{{ t('panel.servicesStopped', { n: stopped }) }}</span>
-    </h3>
+  <PanelSection
+    v-if="services.length"
+    id="services"
+    :title="t('panel.services')"
+    :summary="stopped ? t('panel.servicesStopped', { n: stopped }) : String(services.length)"
+    data-test="services"
+  >
     <ul class="services">
       <li
         v-for="s in services"
@@ -103,7 +121,7 @@ const tone = (p?: number) => (p === undefined ? '' : p >= 90 ? 'bad' : p >= 75 ?
         {{ s.description || s.name }}
       </li>
     </ul>
-  </section>
+  </PanelSection>
 </template>
 
 <style scoped>

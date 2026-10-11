@@ -57,6 +57,8 @@ IPADDR, COUNTER32, GAUGE32, TICKS, OPAQUE, COUNTER64 = 0x40, 0x41, 0x42, 0x43, 0
 NO_SUCH_OBJECT, NO_SUCH_INSTANCE, END_OF_MIB = 0x80, 0x81, 0x82
 GET, GETNEXT, RESPONSE, SET, TRAP1, GETBULK, INFORM, TRAP2, REPORT = range(0xA0, 0xA9)
 NUMERIC = (INTEGER, COUNTER32, GAUGE32, TICKS, COUNTER64)
+# IF-MIB ifAdminStatus: the one writable object (a port enabled or disabled).
+IF_ADMIN_STATUS = "1.3.6.1.2.1.2.2.1.7"
 
 Oid = tuple[int, ...]
 Value = tuple[int, Any]  # (BER tag, Python value)
@@ -2183,6 +2185,7 @@ class SnmpAgent(UdpService):
         cred = configs.snmp_credential(name, ctx.secrets)
         self.v3cfg: dict[str, Any] | None = cred["v3"]
         self.community = str(cred["community"]).encode()
+        self.write_community = str(cred["write_community"]).encode()
         self.v2c = self.v3cfg is None  # the v3 agent (core-sw01) has v1/v2c turned off
         node = ctx.world.d.nodes[spec["node"]]
         self.dev = device_for(self, node)
@@ -2237,9 +2240,12 @@ class SnmpAgent(UdpService):
         if not self.v2c:
             return None
         community = data[items[1][1] : items[1][2]]
-        if not hmac.compare_digest(community, self.community):
+        write = hmac.compare_digest(community, self.write_community)
+        if not write and not hmac.compare_digest(community, self.community):
             return None  # snmpInBadCommunityNames: no answer
         pdu = dec_pdu(data, items[2])
+        if pdu.tag == SET:
+            return tlv(SEQUENCE, enc_int(version) + tlv(OCTETS, community) + self.set(pdu, snap, write, version == 0))
         resp = self.respond(pdu, self.mib(snap), v1=version == 0, limit=self.dev.max_size)
         if resp is None:
             return None
@@ -2300,6 +2306,27 @@ class SnmpAgent(UdpService):
         if pdu.tag == SET:
             return self._error(pdu, 2 if v1 else 6, 1)
         return None
+
+    def set(self, pdu: Pdu, snap: Snapshot, write: bool, v1: bool = False) -> bytes:
+        """A SET: only ifAdminStatus is writable (up 1, down 2), and only with the
+        write community or the v3 user; the port goes down in the world."""
+        if not write:
+            return self._error(pdu, 2 if v1 else 6, 1)  # noSuchName / noAccess
+        rows = {r.index: r for r in self.dev.rows(snap)}
+        admin = OI(IF_ADMIN_STATUS)
+        changes = []
+        for k, (oid, (tag, value)) in enumerate(pdu.varbinds, start=1):
+            row = rows.get(oid[-1]) if oid[:-1] == admin and len(oid) == len(admin) + 1 else None
+            if row is None or row.port is None:
+                return self._error(pdu, 2 if v1 else 17, k)  # notWritable
+            if tag != INTEGER or value not in (1, 2):
+                return self._error(pdu, 3 if v1 else 10, k)  # wrongValue
+            changes.append((row.port, value == 1))
+        for port, up in changes:
+            self.dev.node.ports[port].admin_up = up
+        self._cache.clear()
+        vbs = [enc_varbind(oid, v) for oid, v in pdu.varbinds]
+        return enc_pdu(RESPONSE, pdu.reqid, 0, 0, vbs)
 
     @staticmethod
     def _next(mib: Mib, oid: Oid, v1: bool) -> tuple[Oid, Value] | None:
@@ -2389,7 +2416,10 @@ class SnmpAgent(UdpService):
         if not self.dev.valid_context(ctx_name):
             return self._report(m, UNKNOWN_CONTEXTS, pdu.reqid, m.flags & 1, snap, context)
         limit = min(max(m.max_size, 484), 65507) - 120
-        resp = self.respond(pdu, self.mib(snap, ctx_name), v1=False, limit=min(limit, self.dev.max_size))
+        if pdu.tag == SET:  # the v3 user may write
+            resp = self.set(pdu, snap, write=True)
+        else:
+            resp = self.respond(pdu, self.mib(snap, ctx_name), v1=False, limit=min(limit, self.dev.max_size))
         if resp is None:
             return None
         scoped_out = tlv(SEQUENCE, tlv(OCTETS, self.engine_id) + tlv(OCTETS, context) + resp)
