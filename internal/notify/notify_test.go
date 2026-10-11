@@ -57,7 +57,7 @@ func TestEveryRuleHasTexts(t *testing.T) {
 			"saturated_link", "unmanaged_switch", "unknown_neighbor", "new_device",
 			"fast_ethernet", "integration_available", "link_flapping", "half_duplex", "device_rebooted", "sfp_low_rx",
 			"dhcp_pool_full", "firewall_states_full", "insecure_service", "new_devices_burst", "discovery_limited",
-			"dhcp_no_offer", "dhcp_rogue", "dns_down", "dns_slow", "dns_local",
+			"dhcp_no_offer", "dhcp_rogue", "dns_down", "dns_slow", "dns_local", "vlan_unknown",
 		} {
 			if _, ok := texts[locale][rule]; !ok {
 				t.Errorf("%s: no text for %s", locale, rule)

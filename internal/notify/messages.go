@@ -50,6 +50,7 @@ var texts = map[string]map[string][2]string{
 		"dns_down":              {"DNS {server} does not answer", "It could not resolve {name}: {error}."},
 		"dns_slow":              {"DNS {server} is slow", "It took {ms} ms to resolve a name."},
 		"dns_local":             {"DNS {server} does not resolve local names", "{name}: {error}."},
+		"vlan_unknown":          {"VLAN {vlan} on {node} is not one of the network's", "It was created on the device ({name}), not in Omini."},
 		"_resolved":             {"Resolved: {title}", ""},
 		"_subject":              {"Omini: {title}", "Omini: {n} alerts"},
 		"_test":                 {"Omini test message", "Notifications from Omini reach this channel."},
@@ -90,6 +91,7 @@ var texts = map[string]map[string][2]string{
 		"dns_down":              {"O DNS {server} não responde", "Não resolveu {name}: {error}."},
 		"dns_slow":              {"O DNS {server} está lento", "Levou {ms} ms para resolver um nome."},
 		"dns_local":             {"O DNS {server} não resolve nomes locais", "{name}: {error}."},
+		"vlan_unknown":          {"A VLAN {vlan} em {node} não é da rede", "Foi criada no equipamento ({name}), não no Omini."},
 		"_resolved":             {"Resolvido: {title}", ""},
 		"_subject":              {"Omini: {title}", "Omini: {n} alertas"},
 		"_test":                 {"Mensagem de teste do Omini", "As notificações do Omini chegam a este canal."},
@@ -196,7 +198,7 @@ var short = map[string]map[string]string{
 		"half_duplex": "Half-duplex link", "device_rebooted": "Restarted", "sfp_low_rx": "Weak optical signal",
 		"dhcp_pool_full": "DHCP pool almost full", "firewall_states_full": "State table almost full", "insecure_service": "Insecure service",
 		"discovery_limited": "Discovery limited", "dhcp_no_offer": "DHCP not answering", "dhcp_rogue": "Unknown DHCP server",
-		"dns_down": "DNS not answering", "dns_slow": "Slow DNS", "dns_local": "Local names not resolving",
+		"dns_down": "DNS not answering", "dns_slow": "Slow DNS", "dns_local": "Local names not resolving", "vlan_unknown": "VLAN outside the network's",
 	},
 	"pt-BR": {
 		"device_offline": "Offline", "integration_failed": "Integração falhando", "wan_down": "Internet fora",
@@ -209,7 +211,7 @@ var short = map[string]map[string]string{
 		"half_duplex": "Link half-duplex", "device_rebooted": "Reiniciou", "sfp_low_rx": "Sinal óptico fraco",
 		"dhcp_pool_full": "Pool DHCP quase cheio", "firewall_states_full": "Tabela de states quase cheia", "insecure_service": "Serviço inseguro",
 		"discovery_limited": "Descoberta limitada", "dhcp_no_offer": "DHCP não responde", "dhcp_rogue": "Servidor DHCP desconhecido",
-		"dns_down": "DNS não responde", "dns_slow": "DNS lento", "dns_local": "Nomes locais não resolvem",
+		"dns_down": "DNS não responde", "dns_slow": "DNS lento", "dns_local": "Nomes locais não resolvem", "vlan_unknown": "VLAN fora da rede",
 	},
 }
 

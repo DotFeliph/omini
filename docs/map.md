@@ -173,6 +173,13 @@ port** to open its card:
   is struck through and shows "Disabled" (a port without a link shows "No
   link"); its client stays there, offline.
 
+- **Change VLAN**, when the device's integration can set its ports' VLANs:
+  access (one VLAN) or trunk (tagged VLANs, with a native one or none), from
+  the network's VLANs. **See what changes** lists, device by device, what
+  Omini will do: create the VLAN where it is missing and tag it on each link
+  up to the router, and what it cannot (the router, for now, and devices it
+  does not manage) for you to do by hand. Then **Apply**.
+
 Taking a device off the network is an ordinary change. Disabling a port is
 **destructive** only when it hurts the network as a whole: when Omini reaches
 the device through it, or when it is the way to the router and the internet
@@ -203,6 +210,16 @@ traffic), DHCP pool usage and firewall states (yellow from 75 %, red from
   with the device's error.
 - **Pin** (a pinned device is never folded into a bubble), **Hide** and
   **Delete**.
+
+## The network's VLANs
+
+**VLANs** in the menu lists the network's VLANs: id, name, color, subnet, and
+on which devices and ports each one is. Omini keeps them: the first time it
+imports those the devices already have, and from then on you create, rename
+and delete them here, and Omini applies it to the devices (a new name to
+every device that has the VLAN; a deleted VLAN from every device, which must
+not use it on a port any more). A VLAN created on a device by hand is an
+alert (`vlan_unknown`). Ports go into VLANs from their card (above).
 
 ## Folding children into bubbles
 

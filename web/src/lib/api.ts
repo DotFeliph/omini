@@ -18,9 +18,12 @@ import type {
   ChangeKind,
   ConfigChange,
   PluginIndexStatus,
+  NetworkVlan,
   PluginInfo,
   Point,
+  PortVlans,
   ServicesView,
+  VlanPlan,
   TestResult,
   TopologyResponse,
   WebService,
@@ -208,6 +211,26 @@ export const api = {
   },
   /** The "DNS and DHCP" screen: the scan's checks, pools and leases. */
   services: () => request<ServicesView>('GET', '/api/dns-dhcp'),
+
+  /** The network's VLANs (imported from the devices the first time). */
+  vlans: () => request<NetworkVlan[]>('GET', '/api/vlans'),
+  createVlan: (v: { id: number; name: string; color?: string; subnet?: string }) =>
+    request<{ vlan: NetworkVlan; changes: ConfigChange[] }>('POST', '/api/vlans', v),
+  updateVlan: (id: number, patch: { name?: string; color?: string; subnet?: string }) =>
+    request<{ vlan: NetworkVlan; changes: ConfigChange[] }>('PATCH', `/api/vlans/${id}`, patch),
+  deleteVlan: (id: number) => request<{ changes: ConfigChange[] }>('DELETE', `/api/vlans/${id}`),
+  /** What putting a port in VLANs changes on every device on the way to the router. */
+  planVlans: (nodeId: string, port: string, value: PortVlans) =>
+    request<VlanPlan>('POST', `/api/nodes/${encodeURIComponent(nodeId)}/vlan-plan`, {
+      port,
+      value,
+    }),
+  applyVlans: (nodeId: string, port: string, value: PortVlans, confirm = false) =>
+    request<{ changes: ConfigChange[] }>('POST', `/api/nodes/${encodeURIComponent(nodeId)}/vlans`, {
+      port,
+      value,
+      confirm,
+    }),
   flows: (q: { minutes?: number; node?: string; limit?: number } = {}) => {
     const params = new URLSearchParams()
     if (q.minutes) params.set('minutes', String(q.minutes))

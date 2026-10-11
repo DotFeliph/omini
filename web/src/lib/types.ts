@@ -500,7 +500,7 @@ export interface FlowsResponse {
 }
 
 /** A configuration change Omini can apply to a device. */
-export type ChangeKind = 'port.enabled'
+export type ChangeKind = 'port.enabled' | 'port.vlans' | 'vlan.set' | 'vlan.delete'
 
 /**
  * Why disabling a port is destructive: Omini reaches the device through it, or
@@ -564,4 +564,32 @@ export interface ServicesView {
   }
   dns: { servers: { server: string; node_id?: string; external?: DnsQuery; local?: DnsQuery }[] }
   generated_at?: string
+}
+
+/** A VLAN of the network's catalog, and where it is. */
+export interface NetworkVlan {
+  id: number
+  name: string
+  color?: string
+  subnet?: string
+  devices: { node_id: string; name?: string; untagged: string[]; tagged: string[] }[]
+}
+
+/** A port's VLANs: access (untagged only) or trunk (tagged, with a native VLAN or none). */
+export interface PortVlans {
+  untagged?: number
+  tagged?: number[]
+}
+
+/** What setting a port's VLANs changes, device by device. */
+export interface VlanPlan {
+  steps: {
+    node_id: string
+    kind: ChangeKind
+    port?: string
+    value: unknown
+    protected?: Protection
+  }[]
+  /** Devices on the way Omini does not manage (or the router, later): by hand. */
+  notes: { node_id: string; reason: 'unmanaged' | 'router' | 'unknown_port'; vlans?: number[] }[]
 }

@@ -279,6 +279,16 @@ var migrations = []string{
 	);
 	CREATE INDEX config_changes_node ON config_changes (node_id, at);
 	`,
+	// 21: the network's VLANs (Omini is their source of truth).
+	`
+	CREATE TABLE vlans (
+		id         INTEGER PRIMARY KEY, -- 1 to 4094
+		name       TEXT NOT NULL DEFAULT '',
+		color      TEXT NOT NULL DEFAULT '',
+		subnet     TEXT NOT NULL DEFAULT '',
+		created_at INTEGER NOT NULL      -- unix seconds
+	);
+	`,
 }
 
 // Open opens (creating if needed) the database at path and applies migrations.

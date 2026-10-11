@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -86,8 +87,9 @@ func (c *Collector) Apply(ctx context.Context, req ChangeRequest) (store.ConfigC
 		return store.ConfigChange{}, err
 	}
 	req.Value = value
-	// Disabling a protected port, or changing its VLANs, is destructive.
-	if p, guarded := n.Protected[req.Port]; guarded && (req.Kind == model.ChangeKindPortVlans || req.Value == false) {
+	// Disabling a protected port, or changing its VLANs (other than adding a
+	// tagged one), is destructive.
+	if p, guarded := n.Protected[req.Port]; guarded && destructive(req, before) {
 		if allowed := c.AllowDestructive(ctx); !allowed || !req.Confirmed {
 			return store.ConfigChange{}, &DestructiveError{Protection: p, Allowed: allowed}
 		}
@@ -138,6 +140,12 @@ func (c *Collector) node(id string) (topology.Node, bool) {
 // checkChange validates a change against the device, and returns the value it
 // replaces as JSON and the value to send (normalized).
 func checkChange(n topology.Node, req ChangeRequest) (json.RawMessage, any, error) {
+	switch req.Kind {
+	case model.ChangeKindVlanSet:
+		return vlanSet(n, req.Value)
+	case model.ChangeKindVlanDelete:
+		return vlanDelete(n, req.Value)
+	}
 	i := slices.IndexFunc(n.Device.Interfaces, func(i model.Interface) bool { return i.Name == req.Port })
 	if i < 0 {
 		return nil, nil, fmt.Errorf("%w: %s has no port %q", ErrInvalidChange, n.Label, req.Port)
@@ -437,7 +445,91 @@ func offers(d *model.Device, k model.ChangeKind) bool {
 	case model.ChangeKindPortEnabled:
 		return slices.ContainsFunc(d.Interfaces, func(i model.Interface) bool { return i.Enabled != nil })
 	case model.ChangeKindPortVlans:
-		return len(d.Vlans) > 1 && slices.ContainsFunc(d.Interfaces, func(i model.Interface) bool { return i.Vlans != nil })
+		return slices.ContainsFunc(d.Interfaces, func(i model.Interface) bool { return i.Vlans != nil })
+	case model.ChangeKindVlanSet, model.ChangeKindVlanDelete:
+		return len(d.Vlans) > 0
+	}
+	return false
+}
+
+// VlanValue is the value of vlan.set ({id, name}) and vlan.delete ({id}).
+type VlanValue struct {
+	ID   uint16 `json:"id"`
+	Name string `json:"name,omitempty"`
+}
+
+func vlanValue(value any) (VlanValue, error) {
+	var v VlanValue
+	raw, err := json.Marshal(value)
+	if err == nil {
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.DisallowUnknownFields()
+		err = dec.Decode(&v)
+	}
+	if err != nil || v.ID < 1 || v.ID > 4094 {
+		return v, fmt.Errorf("%w: a VLAN is {id (1-4094), name}", ErrInvalidChange)
+	}
+	v.Name = strings.TrimSpace(v.Name)
+	return v, nil
+}
+
+// vlanSet creates a VLAN on the device, or renames it.
+func vlanSet(n topology.Node, value any) (json.RawMessage, any, error) {
+	v, err := vlanValue(value)
+	if err != nil {
+		return nil, nil, err
+	}
+	i := slices.IndexFunc(n.Device.Vlans, func(x model.Vlan) bool { return x.ID == v.ID })
+	if i < 0 {
+		return nil, v, nil
+	}
+	before, err := json.Marshal(VlanValue{ID: v.ID, Name: model.Deref(n.Device.Vlans[i].Name)})
+	return before, v, err
+}
+
+// vlanDelete deletes a VLAN no port of the device uses (never VLAN 1).
+func vlanDelete(n topology.Node, value any) (json.RawMessage, any, error) {
+	v, err := vlanValue(value)
+	if err != nil {
+		return nil, nil, err
+	}
+	if v.ID == 1 {
+		return nil, nil, fmt.Errorf("%w: VLAN 1 cannot be deleted", ErrInvalidChange)
+	}
+	i := slices.IndexFunc(n.Device.Vlans, func(x model.Vlan) bool { return x.ID == v.ID })
+	if i < 0 {
+		return nil, nil, fmt.Errorf("%w: %s has no VLAN %d", ErrInvalidChange, n.Label, v.ID)
+	}
+	for _, p := range n.Device.Interfaces {
+		if p.Vlans != nil && (model.Deref(p.Vlans.Untagged) == v.ID || slices.Contains(p.Vlans.Tagged, v.ID)) {
+			return nil, nil, fmt.Errorf("%w: VLAN %d is in use on %s", ErrInvalidChange, v.ID, p.Name)
+		}
+	}
+	before, err := json.Marshal(VlanValue{ID: v.ID, Name: model.Deref(n.Device.Vlans[i].Name)})
+	return before, VlanValue{ID: v.ID}, err
+}
+
+// destructive reports whether a change cuts what goes through a protected
+// port: disabling it, or changing its VLANs other than adding tagged ones.
+func destructive(req ChangeRequest, before json.RawMessage) bool {
+	switch req.Kind {
+	case model.ChangeKindPortEnabled:
+		return req.Value == false
+	case model.ChangeKindPortVlans:
+		var was model.PortVlans
+		after, ok := req.Value.(model.PortVlans)
+		if !ok || json.Unmarshal(before, &was) != nil {
+			return true
+		}
+		if model.Deref(was.Untagged) != model.Deref(after.Untagged) {
+			return true
+		}
+		for _, id := range was.Tagged {
+			if !slices.Contains(after.Tagged, id) {
+				return true
+			}
+		}
+		return false
 	}
 	return false
 }

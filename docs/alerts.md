@@ -63,6 +63,7 @@ attention) and **info** (worth knowing).
 | `dns_down` | critical | A DNS server of the network does not resolve the internet name of the check |
 | `dns_slow` | warning | A DNS server took more than 500 ms to answer |
 | `dns_local` | warning | A DNS server resolves the internet name but not a local one |
+| `vlan_unknown` | warning | A device has a VLAN that is not one of the network's (created on the device, not in Omini) |
 | `insecure_service` | warning | Telnet (23) or FTP (21) is open on a device, or a network device's admin page is served only over plain HTTP (no 443 or 8443) |
 | `new_devices_burst` | warning | 5 or more devices never seen before appeared within 10 minutes |
 | `new_device` | info | A device is seen for the first time. Shown for 24 hours. Devices found in the first 15 minutes after Omini started tracking are the existing network, not new |

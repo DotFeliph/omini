@@ -170,3 +170,22 @@ def test_disable_and_enable_a_port(world):
         assert p2["enabled"] is True and p2["up"] is True
         ports = ifaces(device(emu.collect("horaco")))
         assert all(p["enabled"] for p in ports.values())
+
+
+def test_vlans_and_a_ports_vlan(world):
+    with Emulator(at=TUE_1030, apis=["horaco"], world=World()) as emu:
+        dev = device(emu.collect("horaco"))
+        ids = {v["id"] for v in dev["vlans"]}
+        assert 1 in ids and 10 in ifaces(dev)["Port 9"]["vlans"]["tagged"] + [
+            ifaces(dev)["Port 9"]["vlans"]["untagged"]
+        ]
+        key = dev["key"]
+        made = device(
+            emu.collect(
+                "horaco", "apply", change={"device": key, "kind": "vlan.set", "value": {"id": 99, "name": "Omini test"}}
+            )
+        )
+        assert {"id": 99, "name": "Omini test"} in made["vlans"]
+        change = {"device": key, "kind": "port.vlans", "port": "Port 3", "value": {"untagged": 99}}
+        p3 = ifaces(device(emu.collect("horaco", "apply", change=change)))["Port 3"]
+        assert p3["vlans"] == {"untagged": 99}

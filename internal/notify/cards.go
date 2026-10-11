@@ -198,6 +198,7 @@ var tips = map[string]map[string]string{
 		"dns_down":              "Check the DNS server is running and has internet access; the DHCP may hand out another one meanwhile.",
 		"dns_slow":              "Check its upstream servers and its load.",
 		"dns_local":             "Check the DNS server knows the local domain (DHCP host names, local records).",
+		"vlan_unknown":          "Add it to the network's VLANs in Omini, or delete it from the device.",
 	},
 	"pt-BR": {
 		"device_offline":        "Veja se está ligado e conectado; se estiver, confira o endereço e as credenciais da integração.",
@@ -233,6 +234,7 @@ var tips = map[string]map[string]string{
 		"dns_down":              "Veja se o servidor DNS está rodando e tem internet; enquanto isso, o DHCP pode entregar outro.",
 		"dns_slow":              "Veja os servidores para onde ele encaminha e a carga dele.",
 		"dns_local":             "Veja se o servidor DNS conhece o domínio local (nomes do DHCP, registros locais).",
+		"vlan_unknown":          "Adicione às VLANs da rede no Omini, ou apague do equipamento.",
 	},
 }
 

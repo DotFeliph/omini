@@ -24,7 +24,8 @@ It runs as one small container (amd64 and arm64, a Raspberry Pi is enough) and k
 - **A topology map that builds itself.** LLDP neighbors, MAC tables, ARP, DHCP leases and Wi-Fi client lists are cross-referenced to work out each device's switch port or access point. Devices without an API (unmanaged switches, APs in bridge mode) are inferred from what the others see.
 - **Live traffic.** Every device shows its current download and upload, every link its port and speed. Click a link or port for its history (per minute for a day, hourly for a year). "Who talks to whom" comes from NetFlow, IPFIX or sFlow.
 - **A device panel.** CPU, memory, temperatures, disks, pending updates, a front view of the ports (RJ45 and SFP, colored by speed, with optics readings), VLANs, VPN peers, services, DHCP pools, the devices it talks to, and its presence timeline.
-- **Alerts that matter.** 32 rules: device offline, WAN gateway down, duplicate IP, links that fell to 100 Mbps or half duplex, flapping ports, low SFP signal, full disks, hot CPUs, insecure services, full DHCP pools, a burst of new devices, and more. Each comes with a hint on what to do.
+- **Alerts that matter.** 33 rules: device offline, WAN gateway down, duplicate IP, links that fell to 100 Mbps or half duplex, flapping ports, low SFP signal, full disks, hot CPUs, insecure services, full DHCP pools, a burst of new devices, and more. Each comes with a hint on what to do.
+- **VLANs for the whole network.** Omini keeps the network's VLANs and applies them to your switches: put a port in a VLAN and it creates the VLAN and tags it on every switch up to the router, showing first what changes on each.
 - **DNS & DHCP.** A screen with the DHCP servers, pools and leases and each DNS server's answers, checked every round: no DHCP answer, a rogue DHCP server, a DNS server down, slow or not resolving local names are alerts.
 - **Notifications.** Telegram, e-mail, generic webhooks (signed with HMAC), Slack, Discord and ntfy, grouped per device and never repeated while an alert flaps.
 - **Your map, your way.** Left-to-right or top-down layout, named and colored areas, fold any node's children into a bubble, VLAN and subnet filter, hide devices. Export to PNG, SVG, draw.io or JSON.
@@ -131,7 +132,7 @@ The core is written in **Go**: discovery, SNMP, topology, traffic and the API in
 
 ## Roadmap
 
-- VLANs for the whole network managed in Omini (switches first, then the router: subnet, DHCP and firewall)
+- VLANs on the router: the VLAN's interface and subnet, its DHCP pool and basic firewall rules (OPNsense first); VLANs on MikroTik, UniFi, Omada, OpenWrt and SNMP switches
 - A "DNS and DHCP" screen with checks every round
 - More configuration changes, one at a time: a port's name, reboot, configuration backups with history
 - More plugins and SNMP profiles, reviewed on real hardware

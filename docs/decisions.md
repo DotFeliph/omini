@@ -290,6 +290,10 @@ access point and router alike.
   confirmation.
 - **The same protection**: changing the VLANs of the port Omini comes
   through, or of the way to the internet, is destructive.
+- **Changes** `vlan.set` (create or rename) and `vlan.delete` (never VLAN 1,
+  nor one a port still uses), next to `port.vlans`. Adding a tagged VLAN to a
+  protected port is not destructive; changing its native VLAN or removing one
+  is.
 - **Phases**: first the catalog and the switches (Horaco, the maintainer's,
   tested for real; then MikroTik, UniFi, Omada, OpenWrt and SNMP), then the
   router (OPNsense first): the VLAN's interface and subnet, its DHCP pool and

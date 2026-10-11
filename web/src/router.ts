@@ -12,6 +12,7 @@ export const router = createRouter({
     },
     { path: '/flows', name: 'flows', component: () => import('./views/FlowsView.vue') },
     { path: '/dns-dhcp', name: 'services', component: () => import('./views/ServicesView.vue') },
+    { path: '/vlans', name: 'vlans', component: () => import('./views/VlansView.vue') },
     { path: '/store', redirect: { path: '/integrations', query: { store: '1' } } }, // the store is a modal there
     { path: '/alerts', name: 'alerts', component: () => import('./views/AlertsView.vue') },
     { path: '/insights', redirect: (to) => ({ path: '/alerts', query: to.query }) }, // old address

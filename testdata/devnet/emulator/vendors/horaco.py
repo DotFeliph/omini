@@ -238,6 +238,7 @@ class Horaco(HttpService):
         self.mac_page = 1  # the MAC table's current page (the firmware keeps it between requests)
         self.mac_search: str | None = None
         self.saves = 0  # Save Configuration posts
+        self.added_vlans: dict[int, str] = {}  # created or renamed with Add VLAN
 
     # ------------------------------------------------------------------ helpers
 
@@ -287,6 +288,7 @@ class Horaco(HttpService):
             "/info.cgi": self.info,
             "/port.cgi": self.port,
             "/save.cgi": self.save,
+            "/vlan.cgi": self.vlan,
             "/panel.cgi": self.panel,
             "/mac.cgi": self.mac,
         }
@@ -409,6 +411,51 @@ class Horaco(HttpService):
             )
         return f"""<html><head><title>Port Setting</title><link rel="stylesheet" type="text/css" href="/style.css"></head><body><h3>Port Setting</h3>{port_form("portcfg", "", rj45, PORT_SPEEDS)}{port_form("extportcfg", "ext", sfp, SFP_SPEEDS) if sfp else ""}<hr><h3>Port List</h3><br><div class="tblcfgdiv"><table><tr><th rowspan="2" style="width:90px;height:80px">Port</th><th rowspan="2" width="90">State</th><th colspan="2" style="width:280px;height:40px">Duplex Mode</th><th colspan="2" width="280">Negotiation Speed</th><th colspan="2" width="130">Flow Control</th></tr><tr><th width="140">Config Attribute</th><th width="140">Actual Status</th><th width="140">Config Attribute</th><th width="140">Actual Status</th><th width="140">Config Attribute</th><th width="140">Actual Status</th></tr>{"".join(rows)}</table></div></body></html>
 """
+
+    # ------------------------------------------------------------------ 802.1Q
+
+    def switch_vlans(self) -> dict[int, str]:
+        """The switch's VLANs: VLAN 1, its ports' and those added (14-character names)."""
+        n = self.ctx.world.d.node(self.node)
+        ids = {1}
+        for p in n.ports.values():
+            ids.update(v for v in (p.untagged, *p.tagged) if v)
+        out = {}
+        for vid in sorted(ids):
+            v = self.ctx.world.d.vlans.get((n.site, vid))
+            out[vid] = (v.name if v and vid != 1 else "")[:14]
+        return {**out, **self.added_vlans}
+
+    def vlan(self, req: Request, snap: Snapshot) -> str:
+        n = self.ctx.world.d.node(self.node)
+        if req.arg("page") == "static":
+            if req.method == "POST" and req.form().get("vid", "").isdigit():
+                vid = int(req.form()["vid"])
+                if 1 <= vid <= 4094:
+                    self.added_vlans[vid] = req.form().get("name", "")[:14]
+            return vlan_static_page(sorted(self.switch_vlans().items()))
+        if req.method == "POST" and "vlan_type" in req.form():
+            form = req.form()
+            for i, name in enumerate(self.ports()):
+                if form.get(f"port{i}") != "on":
+                    continue
+                p = n.ports[name]
+                if form["vlan_type"] == "0":
+                    p.untagged, p.tagged = int(form["vlan_access"]), ()
+                elif form["vlan_type"] == "1":
+                    native = int(form["vlan_native"])
+                    allowed = sorted(int(k[4:]) for k in form if k[4:].isdigit() and k.startswith("VLAN"))
+                    p.untagged, p.tagged = native, tuple(v for v in allowed if v != native)
+        rows = []
+        for name in self.ports():
+            p = n.ports[name]
+            if p.tagged:
+                native = p.untagged or 1
+                trunk = ",".join(str(v) for v in sorted({native, *p.tagged}))
+                rows.append((name, "Trunk", native, native, trunk))
+            else:
+                rows.append((name, "Access", p.untagged or 1, "-", "-"))
+        return vlan_port_page(self.ports(), sorted(self.switch_vlans()), rows)
 
     def save(self, req: Request, snap: Snapshot) -> str:
         if req.method == "POST" and req.form().get("cmd") == "save":
@@ -758,3 +805,54 @@ function reloadAll() {
 </body>
 </html>
 """
+
+
+def vlan_static_page(vlans: list[tuple[int, str]]) -> str:
+    """Add VLAN: the VLAN Manage switch, the form, and the list (VLAN 1 cannot be deleted)."""
+    box = '<input type="checkbox" class="vlanchk">'
+    rows = "".join(
+        f"<tr><td>{'' if vid == 1 else box}</td><td>{i}</td><td>{vid}</td><td>{name}</td></tr>"
+        for i, (vid, name) in enumerate(vlans, start=1)
+    )
+    return (
+        '<html><head><title>VLAN Static</title></head><body><form method="post" name="vlaneblfrm" '
+        'action="/vlan.cgi?page=state"><table><tr><td>VLAN Manage:</td><td><input type="checkbox" '
+        'name="enable_vlan" checked></td></tr></table></form><form method="post" name="formVlanStatic" '
+        'id="formVlanStatic" action="/vlan.cgi?page=static"><table><tr><td>VLAN ID:</td><td><input type="text" '
+        'name="vid" id="vlanID"></td></tr><tr><td>VLAN Name:</td><td><input type="text" name="name"></td></tr>'
+        '</table><input type="button" value="Apply" onclick="addVlanClick()"></form><form method="post" '
+        'name="formVlanStatic" id="formVlanDelStatic" action="/vlan.cgi?page=getRmvVlanEntry"><table><tr>'
+        f"<th>Select</th><th>No.</th><th>VLAN ID</th><th>VLAN Name</th></tr>{rows}"
+        '</table><input type="button" value="Select All"></form></body></html>'
+    )
+
+
+def vlan_port_page(ports: list[str], vlans: list[int], rows: list[tuple[str, str, int, int | str, str]]) -> str:
+    """802.1Q VLAN Setting: the port form (checkboxes port<index>, unclosed options) and the list."""
+    boxes = "".join(
+        f'<input type="checkbox" id=port{i} name=port{i} class="chkp"><label for=port{i}>{name}</label><br>'
+        for i, name in enumerate(ports)
+    )
+    opts = "".join(f'<option value="{v}">VLAN {v}\n ' for v in vlans)
+    trunk = "".join(
+        f'<input type="checkbox" id=VLAN{v} name=VLAN{v} class="chkvlan"><label for=VLAN{v}>VLAN {v}</label><br>'
+        for v in vlans
+    )
+    listed = "".join(
+        f"<tr><td>{p}</td><td>{mode}</td><td>{access}</td><td>{native}</td><td>{allowed}</td></tr>"
+        for p, mode, access, native, allowed in rows
+    )
+    return (
+        "<html><head><title>VLAN Port Information</title></head><body><h3>802.1Q VLAN Setting</h3>"
+        '<form method="post" id="portVlan" action="/vlan.cgi?page=port_based"><table><tr><th>Port</th>'
+        "<th>Port vlan type</th><th>Access VLAN</th><th>Native VLAN</th><th>Trunk vlan</th></tr><tr><td>"
+        f'<input type="checkbox" id="all" name="all"><label for="all">Select All</label><br>{boxes}</td>'
+        '<td><select name="vlan_type" id="vlan_type"><option value="0">Access\n <option value="1">Trunk\n '
+        '<option value="2">Hybrid\n </select><select name="accept_type" id="accept_type"><option value="0">All\n '
+        '<option value="1">Tag Only\n <option value="2">Untag Only\n </select></td>'
+        f'<td><select name="vlan_access" id="vlanAccess">{opts}</select></td>'
+        f'<td><select name="vlan_native" id="vlanTrunk" disabled>{opts}</select></td><td>{trunk}</td></tr>'
+        '</table><input type="button" value="Apply" onclick="chkVlanEnable()"></form><hr><table><tr><th>Port</th>'
+        f"<th>Port vlan type</th><th>Access VLAN</th><th>Native VLAN</th><th>Trunk vlan</th></tr>{listed}"
+        "</table></body></html>"
+    )

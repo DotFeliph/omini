@@ -74,6 +74,8 @@ type Input struct {
 	Configured map[string]bool
 	// DiscoveryLimited: what the network scan cannot do where Omini runs.
 	DiscoveryLimited []string
+	// Vlans is the network's VLAN catalog, by id (nil before it exists).
+	Vlans map[uint16]string
 	// Core are the built-in integrations (network scan, nmap...): a device only
 	// they report is not read by an integration of its own yet.
 	Core map[int64]bool

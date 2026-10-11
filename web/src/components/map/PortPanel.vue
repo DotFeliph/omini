@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { Check, Pencil, Power, PowerOff, ShieldAlert, X } from 'lucide-vue-next'
+import { Check, Layers, Pencil, Power, PowerOff, ShieldAlert, X } from 'lucide-vue-next'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import TrafficChart from '@/components/TrafficChart.vue'
+import PortVlansEditor from '@/components/map/PortVlansEditor.vue'
 import { api, ApiError } from '@/lib/api'
 import { formatBytes, formatSpeed } from '@/lib/format'
 import { speedColor, speedTier, SPEED_TIERS } from '@/lib/speed'
@@ -29,6 +30,8 @@ const props = defineProps<{
   guards?: Record<string, string>
   /** Destructive changes are allowed (Settings): asked twice instead of blocked. */
   allowDestructive?: boolean
+  /** A node's name on the map (the VLAN plan names the devices it changes). */
+  nameOf?: (id: string) => string
 }>()
 const emit = defineEmits<{
   /** Rename a port (empty: back to the device's own name). */
@@ -81,12 +84,15 @@ function saveName(p: Interface) {
 // Enabling or disabling a port: one short confirmation; a destructive one is
 // blocked, or (when allowed in Settings) asked a second time.
 const canToggle = computed(() => !!props.nodeId && !!props.changes?.includes('port.enabled'))
+const canVlans = computed(() => !!props.nodeId && !!props.changes?.includes('port.vlans'))
+const editingVlans = ref(false)
 const step = ref<'' | 'confirm' | 'again'>('')
 const busy = ref(false)
 const changeError = ref('')
 watch(selected, () => {
   step.value = ''
   changeError.value = ''
+  editingVlans.value = false
 })
 const disabled = (p: Interface) => p.enabled === false
 /** Why disabling this port is not allowed (blocked), or '' when it may be done. */
@@ -418,6 +424,27 @@ function shortName(name: string) {
           {{ t('changes.blocked', { why: blockedWhy(current) }) }}
         </p>
         <p v-if="changeError" class="change-error" role="alert">{{ changeError }}</p>
+      </template>
+
+      <template v-if="canVlans && current.vlans && !step">
+        <PortVlansEditor
+          v-if="editingVlans"
+          :node-id="nodeId!"
+          :port="current"
+          :name-of="nameOf ?? ((id: string) => id)"
+          :allow-destructive="allowDestructive"
+          @close="editingVlans = false"
+          @applied="emit('applied')"
+        />
+        <button
+          v-else
+          class="btn toggle"
+          type="button"
+          data-test="edit-vlans"
+          @click="editingVlans = true"
+        >
+          <Layers :size="15" />{{ t('portVlans.change') }}
+        </button>
       </template>
 
       <div v-if="nodeId && current.rx_bytes !== undefined" class="port-traffic">

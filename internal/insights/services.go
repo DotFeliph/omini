@@ -1,6 +1,8 @@
 package insights
 
 import (
+	"fmt"
+
 	"github.com/riccardoalv/omini/internal/model"
 	"github.com/riccardoalv/omini/internal/topology"
 )
@@ -140,4 +142,25 @@ func KnownDHCPServers(topo topology.Topology) map[string]bool {
 		}
 	}
 	return known
+}
+
+func init() { Rules["vlan_unknown"] = vlanUnknown }
+
+// vlanUnknown: a device has a VLAN the network's catalog does not (created on
+// the device by hand): Omini is the VLANs' source of truth.
+func vlanUnknown(in Input, _ index) []Insight {
+	if in.Vlans == nil {
+		return nil
+	}
+	var out []Insight
+	for _, n := range devices(in) {
+		for _, v := range n.Device.Vlans {
+			if _, ok := in.Vlans[v.ID]; !ok {
+				out = append(out, node("vlan_unknown", Warning, n, fmt.Sprint(v.ID), map[string]any{
+					"vlan": v.ID, "name": model.Deref(v.Name),
+				}))
+			}
+		}
+	}
+	return out
 }

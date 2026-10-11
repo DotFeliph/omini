@@ -55,6 +55,12 @@ func (c *Collector) watch(ctx context.Context, topo topology.Topology, inventory
 		}
 	}
 	in.Detectors = detectors()
+	if list, err := c.store.Vlans(ctx); err == nil && len(list) > 0 {
+		in.Vlans = map[uint16]string{}
+		for _, v := range list {
+			in.Vlans[v.ID] = v.Name
+		}
+	}
 	if in.Configured["network"] {
 		in.DiscoveryLimited = c.opts.DiscoveryLimited
 	}

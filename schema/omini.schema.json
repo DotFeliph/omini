@@ -658,10 +658,12 @@
     },
     "ChangeKind": {
       "type": "string",
-      "description": "A configuration change Omini knows. port.enabled: enable (true) or disable (false) a port. port.vlans: the port's VLANs, a PortVlans (access: untagged only; trunk: untagged as the native VLAN, or none, and the tagged list), only VLANs the device has.",
+      "description": "A configuration change Omini knows. port.enabled: enable (true) or disable (false) a port. port.vlans: the port's VLANs, a PortVlans (access: untagged only; trunk: untagged as the native VLAN, or none, and the tagged list), only VLANs the device has. vlan.set: create a VLAN on the device, or rename it ({id, name}). vlan.delete: delete a VLAN from the device ({id}).",
       "enum": [
         "port.enabled",
-        "port.vlans"
+        "port.vlans",
+        "vlan.set",
+        "vlan.delete"
       ]
     },
     "Change": {
@@ -686,7 +688,7 @@
           "description": "Interface name, for the changes of a port."
         },
         "value": {
-          "description": "The new value: a boolean for port.enabled, a PortVlans object for port.vlans."
+          "description": "The new value: a boolean for port.enabled, a PortVlans object for port.vlans, {id, name} for vlan.set, {id} for vlan.delete."
         }
       }
     },

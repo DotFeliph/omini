@@ -102,6 +102,9 @@ author: Your Name
 homepage: https://github.com/you/omini-plugin-example
 changes:                    # optional: the changes `apply` supports
   - port.enabled            # enable or disable a port
+  - port.vlans              # a port's VLANs: {untagged, tagged}
+  - vlan.set                # create or rename a VLAN: {id, name}
+  - vlan.delete             # delete a VLAN: {id}
 fields:                     # the "add integration" form
   - key: url
     type: url

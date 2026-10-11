@@ -30,7 +30,9 @@ type switchy struct {
 func (*switchy) Info() integration.Info {
 	return integration.Info{
 		Type: "switchy", Name: "Switchy", Kind: integration.KindCore,
-		Changes: []model.ChangeKind{model.ChangeKindPortEnabled, model.ChangeKindPortVlans},
+		Changes: []model.ChangeKind{
+			model.ChangeKindPortEnabled, model.ChangeKindPortVlans, model.ChangeKindVlanSet, model.ChangeKindVlanDelete,
+		},
 	}
 }
 
@@ -54,7 +56,15 @@ func (s *switchy) Apply(_ context.Context, _ integration.Config, c model.Change)
 		return nil, s.err
 	}
 	sw := s.devices[1]
-	sw.Interfaces = slices.Clone(sw.Interfaces)
+	sw.Interfaces, sw.Vlans = slices.Clone(sw.Interfaces), slices.Clone(sw.Vlans)
+	if v, ok := c.Value.(collector.VlanValue); ok {
+		sw.Vlans = slices.DeleteFunc(sw.Vlans, func(x model.Vlan) bool { return x.ID == v.ID })
+		if c.Kind == model.ChangeKindVlanSet {
+			sw.Vlans = append(sw.Vlans, model.Vlan{ID: v.ID, Name: model.Ptr(v.Name)})
+		}
+		s.devices[1] = sw
+		return []model.Device{sw}, nil
+	}
 	for i := range sw.Interfaces {
 		if sw.Interfaces[i].Name == *c.Port {
 			if v, ok := c.Value.(model.PortVlans); ok {
@@ -156,7 +166,7 @@ func portEnabled(n topology.Node, port string) *bool {
 func TestProtectedPorts(t *testing.T) {
 	coll, _, _ := switchNetwork(t)
 	n := switchNode(t, coll)
-	if !slices.Equal(n.Changes, []model.ChangeKind{model.ChangeKindPortEnabled, model.ChangeKindPortVlans}) {
+	if !slices.Contains(n.Changes, model.ChangeKindPortEnabled) || !slices.Contains(n.Changes, model.ChangeKindVlanSet) {
 		t.Fatalf("changes: %v", n.Changes)
 	}
 	if p := n.Protected["Port 3"]; p.Reason != "omini" {

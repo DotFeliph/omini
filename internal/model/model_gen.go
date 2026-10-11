@@ -51,7 +51,8 @@ type Change struct {
 	// Interface name, for the changes of a port.
 	Port *string `json:"port,omitempty,omitzero" yaml:"port,omitempty"`
 
-	// The new value: a boolean for port.enabled, a PortVlans object for port.vlans.
+	// The new value: a boolean for port.enabled, a PortVlans object for port.vlans,
+	// {id, name} for vlan.set, {id} for vlan.delete.
 	Value interface{} `json:"value" yaml:"value"`
 }
 
@@ -59,10 +60,14 @@ type ChangeKind string
 
 const ChangeKindPortEnabled ChangeKind = "port.enabled"
 const ChangeKindPortVlans ChangeKind = "port.vlans"
+const ChangeKindVlanDelete ChangeKind = "vlan.delete"
+const ChangeKindVlanSet ChangeKind = "vlan.set"
 
 var enumValues_ChangeKind = []interface{}{
 	"port.enabled",
 	"port.vlans",
+	"vlan.set",
+	"vlan.delete",
 }
 
 // UnmarshalJSON implements json.Unmarshaler.

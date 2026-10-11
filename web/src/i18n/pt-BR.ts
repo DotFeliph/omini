@@ -8,6 +8,7 @@ const ptBR: typeof en = {
     alerts: 'Alertas',
     flows: 'Fluxos',
     services: 'DNS e DHCP',
+    vlans: 'VLANs',
     integrations: 'Integrações',
     settings: 'Configurações',
     expand: 'Expandir menu',
@@ -293,6 +294,58 @@ const ptBR: typeof en = {
     unknown: 'Desconhecido',
     client: 'Cliente',
   },
+  portVlans: {
+    change: 'Mudar VLAN',
+    modeAccess: 'Access (uma VLAN)',
+    modeTrunk: 'Trunk (várias, com tag)',
+    vlan: 'VLAN',
+    native: 'VLAN nativa (sem tag)',
+    noNative: 'Nenhuma',
+    tagged: 'VLANs com tag',
+    noCatalog: 'A rede ainda não tem VLANs: crie na tela de VLANs.',
+    preview: 'Ver o que muda',
+    planFor: '{port} → {vlans}. O que muda:',
+    stepCreate: '{device}: criar a VLAN {vlan}',
+    stepPort: '{device}: {port} → {vlans}',
+    notes: {
+      router:
+        '{device} (o roteador) ainda não tem a VLAN {vlans}: crie lá (o Omini fará isso depois).',
+      unmanaged: '{device} não é gerenciado pelo Omini: passe a VLAN {vlans} por ele à mão.',
+      unknown_port:
+        'Em {device}, a porta para o próximo equipamento não é conhecida: marque a VLAN {vlans} nela à mão.',
+    },
+    blocked:
+      'Um passo corta o acesso do Omini ou a internet: permita ações destrutivas em Configurações para fazer.',
+    askAgain: 'Um passo muda uma porta por onde passam o Omini ou a internet. Aplicar mesmo assim?',
+    back: 'Voltar',
+    apply: 'Aplicar',
+    applyAnyway: 'Aplicar mesmo assim',
+    access: 'VLAN {vlan}',
+    trunk: 'nativa {native}, com tag {tagged}',
+    trunkNoNative: 'com tag {tagged}',
+  },
+  vlans: {
+    title: 'VLANs',
+    subtitle: 'As VLANs da rede: o Omini guarda e aplica nos seus switches.',
+    new: 'Nova VLAN',
+    id: 'ID',
+    name: 'Nome',
+    namePlaceholder: 'ex.: Convidados',
+    subnet: 'Sub-rede',
+    color: 'Cor',
+    edit: 'Editar',
+    delete: 'Apagar',
+    confirmDelete: 'Clique de novo para apagar de todos os equipamentos que a têm.',
+    renameHint: 'O nome novo é aplicado em todos os equipamentos que têm esta VLAN.',
+    unnamed: 'Sem nome',
+    none: 'Nenhuma VLAN ainda.',
+    noneHint:
+      'O Omini importa as VLANs que seus switches já têm assim que uma integração as informa; ou crie uma.',
+    nowhere: 'Ainda em nenhum equipamento: coloque uma porta nela pelo cartão da porta no mapa.',
+    noPorts: 'nenhuma porta',
+    untaggedPorts: 'sem tag: {ports}',
+    taggedPorts: 'com tag: {ports}',
+  },
   services: {
     title: 'DNS e DHCP',
     subtitle: 'Quem entrega endereços e resolve nomes na sua rede, verificado a cada rodada.',
@@ -494,6 +547,10 @@ const ptBR: typeof en = {
         detail: 'Levou {ms} ms para resolver um nome.',
       },
       dns_local: { title: 'O DNS {server} não resolve nomes locais', detail: '{name}: {error}.' },
+      vlan_unknown: {
+        title: 'A VLAN {vlan} em {node} não é da rede',
+        detail: 'Foi criada no equipamento ({name}), não no Omini.',
+      },
     },
     tips: {
       device_offline:
@@ -546,6 +603,7 @@ const ptBR: typeof en = {
       dns_slow: 'Veja os servidores para onde ele encaminha e a carga dele.',
       dns_local:
         'Veja se o servidor DNS conhece o domínio local (nomes do DHCP, registros locais).',
+      vlan_unknown: 'Adicione às VLANs da rede no Omini, ou apague do equipamento.',
     },
   },
   traffic: {

@@ -73,9 +73,9 @@ class Change(BaseModel):
     """
     Key of the device, as the plugin reported it.
     """
-    kind: Literal["port.enabled", "port.vlans"]
+    kind: Literal["port.enabled", "port.vlans", "vlan.set", "vlan.delete"]
     """
-    A configuration change Omini knows. port.enabled: enable (true) or disable (false) a port. port.vlans: the port's VLANs, a PortVlans (access: untagged only; trunk: untagged as the native VLAN, or none, and the tagged list), only VLANs the device has.
+    A configuration change Omini knows. port.enabled: enable (true) or disable (false) a port. port.vlans: the port's VLANs, a PortVlans (access: untagged only; trunk: untagged as the native VLAN, or none, and the tagged list), only VLANs the device has. vlan.set: create a VLAN on the device, or rename it ({id, name}). vlan.delete: delete a VLAN from the device ({id}).
     """
     port: str | None = None
     """
@@ -83,7 +83,7 @@ class Change(BaseModel):
     """
     value: Any
     """
-    The new value: a boolean for port.enabled, a PortVlans object for port.vlans.
+    The new value: a boolean for port.enabled, a PortVlans object for port.vlans, {id, name} for vlan.set, {id} for vlan.delete.
     """
 
 
@@ -605,7 +605,7 @@ class PluginManifest(BaseModel):
     author: str | None = None
     homepage: str | None = None
     fields: list[FormField] | None = None
-    changes: list[Literal["port.enabled", "port.vlans"]] | None = None
+    changes: list[Literal["port.enabled", "port.vlans", "vlan.set", "vlan.delete"]] | None = None
     """
     Configuration changes the plugin can apply (action apply).
     """

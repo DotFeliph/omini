@@ -1,3 +1,4 @@
+import { areaHex } from './areas'
 import type { Interface, TopoEdge, TopoNode, Vlan } from './types'
 
 /** Whether a port carries a VLAN: it is that VLAN's interface, or a member (untagged or tagged). */
@@ -78,4 +79,22 @@ export function vlanMembers(
       inNodes.add(e.target)
     }
   return { nodes: inNodes, edges: inEdges }
+}
+
+/** The colors a VLAN can have (the areas' presets). */
+export const VLAN_COLORS = ['blue', 'green', 'yellow', 'red', 'purple', 'gray'] as const
+
+/** A VLAN's color as "#rrggbb" (gray when it has none). */
+export const vlanHex = (color?: string) => areaHex(color || 'gray')
+
+/** "VLAN 20", "native 1, tagged 10, 20" or "tagged 10, 20". */
+export function describeVlans(
+  v: { untagged?: number; tagged?: number[] },
+  t: (key: string, params: Record<string, unknown>) => string,
+): string {
+  if (!v.tagged?.length) return t('portVlans.access', { vlan: v.untagged })
+  const tags = v.tagged.join(', ')
+  return v.untagged
+    ? t('portVlans.trunk', { native: v.untagged, tagged: tags })
+    : t('portVlans.trunkNoNative', { tagged: tags })
 }

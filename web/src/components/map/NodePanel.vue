@@ -127,6 +127,11 @@ async function loadChanges(id: string | undefined) {
     // best effort
   }
 }
+/** A node's name on the map (for the VLAN plan). */
+const nodeName = (id: string) => {
+  const other = byId.value.get(id)
+  return other ? displayName(other, t) : id
+}
 /** Why disabling each protected port is destructive, in words. */
 const guards = computed(() => {
   const out: Record<string, string> = {}
@@ -744,6 +749,7 @@ async function save(patch: {
             :changes="n.changes"
             :guards="guards"
             :allow-destructive="allowDestructive"
+            :name-of="nodeName"
             @label="savePort"
             @applied="afterChange"
           />

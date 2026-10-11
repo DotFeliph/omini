@@ -100,6 +100,17 @@ the integration reported, in the [plugin data model](plugins.md#what-to-return).
 `target_port`, `kind` (`lldp`, `fdb`, `wifi`, `inferred`, `vpn`) and
 `speed_mbps`.
 
+## VLANs
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/vlans` | The network's VLANs (imported from the devices the first time): `[{id, name, color, subnet, devices: [{node_id, name, untagged, tagged}]}]` |
+| `POST` | `/api/vlans` | Body `{id, name, color, subnet}`: add a VLAN to the catalog (409 when it exists) |
+| `PATCH` | `/api/vlans/{id}` | Change `name`, `color` or `subnet`; a new name is applied to the devices that have the VLAN. Returns `{vlan, changes}` |
+| `DELETE` | `/api/vlans/{id}` | Delete it from every device, then from the catalog; 409 when a device cannot (it names it) |
+| `POST` | `/api/nodes/{id}/vlan-plan` | Body `{port, value}` (`value`: `{untagged, tagged}`): what putting the port in those VLANs changes: `steps` (`node_id`, `kind`, `port`, `value`, `protected` when destructive) and `notes` (`node_id`, `reason`: `router`, `unmanaged` or `unknown_port`, `vlans`) |
+| `POST` | `/api/nodes/{id}/vlans` | Body `{port, value, confirm}`: apply that plan step by step; 409 like a change for a destructive step, 502 with the `changes` made when a device refuses |
+
 ## DNS and DHCP
 
 | Method | Path | Purpose |

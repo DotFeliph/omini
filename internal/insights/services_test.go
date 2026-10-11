@@ -63,3 +63,18 @@ func TestASingleDHCPServerIsNotRogue(t *testing.T) {
 		}
 	}
 }
+
+func TestVLANsOutsideTheCatalog(t *testing.T) {
+	sw := topology.Node{ID: "dev:sw", Kind: topology.KindDevice, Label: "sw", Device: &model.Device{
+		Key: "sw", Vlans: []model.Vlan{{ID: 1}, {ID: 30, Name: model.Ptr("lab")}},
+	}}
+	in := Input{Topology: topology.Topology{Nodes: []topology.Node{sw}}, Now: time.Unix(0, 0)}
+	if got := vlanUnknown(in, index{}); got != nil {
+		t.Fatalf("no catalog yet: %+v", got)
+	}
+	in.Vlans = map[uint16]string{1: "default"}
+	got := vlanUnknown(in, index{})
+	if len(got) != 1 || got[0].Params["vlan"] != uint16(30) || got[0].Params["name"] != "lab" {
+		t.Fatalf("unknown: %+v", got)
+	}
+}
