@@ -1,12 +1,11 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createMemoryHistory, createRouter } from 'vue-router'
 
 import { api } from '@/lib/api'
 import type { ServicesView as View } from '@/lib/types'
 
-import { plugins } from '../../components/__tests__/helpers'
-import ServicesView from '../ServicesView.vue'
+import ServicesTab from '../map/ServicesTab.vue'
+import { plugins } from './helpers'
 
 vi.mock('@/lib/api', async (orig) => {
   const mod = await orig<typeof import('@/lib/api')>()
@@ -56,17 +55,7 @@ const view: View = {
   },
 }
 
-function setup() {
-  return createRouter({
-    history: createMemoryHistory(),
-    routes: [
-      { path: '/', name: 'map', component: { template: '<div />' } },
-      { path: '/dns-dhcp', component: ServicesView },
-    ],
-  })
-}
-
-describe('ServicesView', () => {
+describe('ServicesTab', () => {
   beforeEach(() => {
     vi.mocked(api.services).mockResolvedValue(view)
     vi.mocked(api.topology).mockResolvedValue({
@@ -84,9 +73,7 @@ describe('ServicesView', () => {
   })
 
   it('shows each DHCP check, the servers, pools and leases', async () => {
-    const router = setup()
-    await router.push('/dns-dhcp')
-    const w = mount(ServicesView, { global: { plugins: [...plugins(), router] } })
+    const w = mount(ServicesTab, { global: { plugins: plugins() } })
     await flushPromises()
     const checks = w.findAll('[data-test=dhcp-checks] li')
     expect(checks[0]!.text()).toContain('An unknown server answered too: 192.168.1.250')
@@ -97,16 +84,18 @@ describe('ServicesView', () => {
     expect(servers).toContain('Unknown')
     expect(w.get('[data-test=dhcp-pools]').text()).toContain('190 / 200')
     expect(w.get('[data-test=dhcp-leases]').text()).toContain('Living room TV')
+    // A device's name opens it on the map.
+    await w.get('[data-test=dhcp-leases] .link').trigger('click')
+    expect(w.emitted('select')).toEqual([['mac:tv']])
     await w.get('input[type=search]').setValue('phone')
     expect(w.findAll('[data-test=dhcp-leases] tbody tr')).toHaveLength(1)
     w.unmount()
   })
 
   it('shows each DNS server and whether it answers', async () => {
-    const router = setup()
-    await router.push('/dns-dhcp?tab=dns')
-    const w = mount(ServicesView, { global: { plugins: [...plugins(), router] } })
+    const w = mount(ServicesTab, { global: { plugins: plugins() } })
     await flushPromises()
+    await w.get('[data-test=tab-dns]').trigger('click')
     const rows = w.findAll('[data-test=dns-servers] tbody tr')
     expect(rows[0]!.text()).toContain('OK')
     expect(rows[0]!.text()).toContain('8 ms')

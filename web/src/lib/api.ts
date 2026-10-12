@@ -18,6 +18,7 @@ import type {
   ChangeKind,
   ConfigChange,
   PluginIndexStatus,
+  Network,
   NetworkVlan,
   PluginInfo,
   Point,
@@ -214,11 +215,39 @@ export const api = {
 
   /** The network's VLANs (imported from the devices the first time). */
   vlans: () => request<NetworkVlan[]>('GET', '/api/vlans'),
-  createVlan: (v: { id: number; name: string; color?: string; subnet?: string }) =>
-    request<{ vlan: NetworkVlan; changes: ConfigChange[] }>('POST', '/api/vlans', v),
-  updateVlan: (id: number, patch: { name?: string; color?: string; subnet?: string }) =>
-    request<{ vlan: NetworkVlan; changes: ConfigChange[] }>('PATCH', `/api/vlans/${id}`, patch),
-  deleteVlan: (id: number) => request<{ changes: ConfigChange[] }>('DELETE', `/api/vlans/${id}`),
+  /** A network goes to the router first; a destructive one (Omini's) fails with 409 until confirmed. */
+  createVlan: (v: {
+    id: number
+    name: string
+    color?: string
+    subnet?: string
+    network?: Network
+    confirm?: boolean
+  }) => request<{ vlan: NetworkVlan; changes: ConfigChange[] }>('POST', '/api/vlans', v),
+  updateVlan: (
+    id: number,
+    patch: { name?: string; color?: string; subnet?: string; network?: Network; confirm?: boolean },
+  ) => request<{ vlan: NetworkVlan; changes: ConfigChange[] }>('PATCH', `/api/vlans/${id}`, patch),
+  deleteVlan: (id: number, confirm = false) =>
+    request<{ changes: ConfigChange[] }>(
+      'DELETE',
+      `/api/vlans/${id}${confirm ? '?confirm=1' : ''}`,
+    ),
+  /** Creates or changes a Wi-Fi network on every access point Omini manages (the password is not kept). */
+  setWifi: (w: {
+    ssid: string
+    previous?: string
+    vlan?: number
+    password?: string
+    enabled?: boolean
+  }) => request<{ changes: ConfigChange[] }>('PUT', '/api/wifi', w),
+  deleteWifi: (ssid: string) =>
+    request<{ changes: ConfigChange[] }>('DELETE', `/api/wifi/${encodeURIComponent(ssid)}`),
+  /** Fixes a device's address on the router whose network holds it (a DHCP reservation). */
+  reserve: (nodeId: string, ip: string) =>
+    request<ConfigChange>('PUT', `/api/nodes/${encodeURIComponent(nodeId)}/reservation`, { ip }),
+  unreserve: (nodeId: string) =>
+    request<ConfigChange>('DELETE', `/api/nodes/${encodeURIComponent(nodeId)}/reservation`),
   /** What putting a port in VLANs changes on every device on the way to the router. */
   planVlans: (nodeId: string, port: string, value: PortVlans) =>
     request<VlanPlan>('POST', `/api/nodes/${encodeURIComponent(nodeId)}/vlan-plan`, {

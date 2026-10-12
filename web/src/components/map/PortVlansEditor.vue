@@ -6,6 +6,8 @@ import { api, ApiError } from '@/lib/api'
 import type { Interface, NetworkVlan, PortVlans, VlanPlan } from '@/lib/types'
 import { describeVlans } from '@/lib/vlans'
 
+import VlanPlanSteps from './VlanPlanSteps.vue'
+
 /**
  * A port's VLANs: access (one VLAN) or trunk (tagged VLANs, with a native one
  * or none), from the network's VLANs. Before applying, it shows what changes
@@ -84,25 +86,6 @@ async function apply() {
     busy.value = false
   }
 }
-
-function stepText(s: VlanPlan['steps'][number]) {
-  const who = props.nameOf(s.node_id)
-  if (s.kind === 'vlan.set') {
-    const v = s.value as { id: number; name?: string }
-    return t('portVlans.stepCreate', { device: who, vlan: v.name ? `${v.id} · ${v.name}` : v.id })
-  }
-  return t('portVlans.stepPort', {
-    device: who,
-    port: s.port,
-    vlans: describe(s.value as PortVlans),
-  })
-}
-function noteText(n: VlanPlan['notes'][number]) {
-  return t(`portVlans.notes.${n.reason}`, {
-    device: props.nameOf(n.node_id),
-    vlans: (n.vlans ?? []).join(', '),
-  })
-}
 </script>
 
 <template>
@@ -150,14 +133,7 @@ function noteText(n: VlanPlan['notes'][number]) {
 
     <template v-else>
       <p class="small">{{ t('portVlans.planFor', { port: port.name, vlans: describe(want) }) }}</p>
-      <ol class="steps" data-test="vlan-plan">
-        <li v-for="(s, i) in plan.steps" :key="i" :class="{ danger: s.protected }">
-          {{ stepText(s) }}
-        </li>
-      </ol>
-      <ul v-if="plan.notes.length" class="notes" data-test="vlan-notes">
-        <li v-for="(n, i) in plan.notes" :key="i">{{ noteText(n) }}</li>
-      </ul>
+      <VlanPlanSteps :plan="plan" :name-of="nameOf" />
       <p v-if="destructive && !allowDestructive" class="blocked">{{ t('portVlans.blocked') }}</p>
       <p v-else-if="again" class="confirm-again">{{ t('portVlans.askAgain') }}</p>
       <div class="actions">
@@ -215,20 +191,6 @@ function noteText(n: VlanPlan['notes'][number]) {
   display: flex;
   gap: 6px;
   justify-content: flex-end;
-}
-.steps,
-.notes {
-  display: grid;
-  gap: 4px;
-  margin: 0;
-  padding-left: 18px;
-  font-size: 12.5px;
-}
-.steps .danger {
-  color: var(--danger);
-}
-.notes {
-  color: var(--text-muted);
 }
 .blocked,
 .confirm-again,

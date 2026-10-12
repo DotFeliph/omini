@@ -289,6 +289,8 @@ var migrations = []string{
 		created_at INTEGER NOT NULL      -- unix seconds
 	);
 	`,
+	// 22: a VLAN's network on the router (gateway, DHCP, access, mDNS).
+	`ALTER TABLE vlans ADD COLUMN network TEXT NOT NULL DEFAULT ''; -- JSON model.Network ('' when none)`,
 }
 
 // Open opens (creating if needed) the database at path and applies migrations.

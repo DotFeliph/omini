@@ -15,6 +15,7 @@ vi.mock('@/lib/api', async (orig) => {
       ...mod.api,
       topology: vi.fn<typeof mod.api.topology>(),
       inventory: vi.fn<typeof mod.api.inventory>(),
+      vlans: vi.fn<typeof mod.api.vlans>().mockResolvedValue([]),
       createArea: vi.fn<typeof mod.api.createArea>(),
       integrations: vi.fn<typeof mod.api.integrations>(),
     },
@@ -76,7 +77,7 @@ describe('MapView device list', () => {
     const w = mount(MapView, { global: { plugins: [...plugins(), router] } })
     await flushPromises()
     expect(w.find('[data-test=devices-drawer]').exists()).toBe(false)
-    await w.get('[data-test=devices-chip]').trigger('click')
+    await w.get('[data-test=map-menu]').trigger('click')
     await flushPromises()
     expect(w.find('[data-test=devices-drawer]').exists()).toBe(true)
     // A click on a name closes the list and opens the device.

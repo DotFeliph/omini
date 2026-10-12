@@ -1,6 +1,18 @@
 import { describe, expect, it } from 'vitest'
 
-import { groupNetworks, networkHighlight, networkSubnets, subnetOf } from '@/lib/networks'
+import {
+  groupNetworks,
+  inNetwork,
+  networkColor,
+  networkAreaId,
+  networkAreas,
+  networkHighlight,
+  networkSubnets,
+  NETWORK_PALETTE,
+  subnetOf,
+  suggestGateway,
+  suggestRange,
+} from '@/lib/networks'
 import type { TopoEdge, TopoNode } from '@/lib/types'
 
 const fw: TopoNode = {
@@ -163,5 +175,109 @@ describe('networkHighlight', () => {
     const lan = networkHighlight('subnet:192.168.1.0/24', inclusive, exclusive, edges)!
     expect([...lan].sort()).toEqual(['fw', 'pc', 'sw'])
     expect(networkHighlight(undefined, inclusive, exclusive, edges)).toBeUndefined()
+  })
+})
+
+describe('networkAreas', () => {
+  it('draws every network as areas, one per branch, devices in several networks outside them all', () => {
+    const areas = networkAreas(nodes, edges, [], 'RIGHT')
+    // The LAN is under the switch (pc) and right under the firewall (phone): two areas.
+    expect(areas.map((a) => [a.name, a.members, a.auto, a.id < 0])).toEqual([
+      ['LAN · 192.168.1.0/24', ['pc'], true, true],
+      ['LAN · 192.168.1.0/24', ['phone'], true, true],
+      ['VLAN 20 · IOT', ['cam'], true, true],
+      ['VPN · 10.10.0.0/24', ['laptop'], true, true],
+    ])
+    // The ids are stable: the network and the branch it enters at.
+    expect(networkAreaId('vlan:20@sw')).toBe(areas[2]!.id)
+  })
+
+  it('leaves out a device with something of another network below it', () => {
+    const hub: TopoNode = { id: 'hub', kind: 'unmanaged', label: 'hub', online: true }
+    const areas = networkAreas(
+      [...nodes, hub, client('tv', '192.168.1.80')],
+      [
+        ...edges,
+        { id: 'h', source: 'sw', target: 'hub', source_port: 'Port 3', kind: 'fdb' },
+        { id: 'h1', source: 'hub', target: 'tv', kind: 'inferred' },
+      ],
+      [],
+      'RIGHT',
+    )
+    // Only the TV below it: the hub is in the LAN with it.
+    expect(areas.find((a) => a.members.includes('tv'))!.members).toContain('hub')
+    const mixed = networkAreas(
+      [...nodes, hub, client('tv', '192.168.1.80'), client('cam2', '192.168.20.11')],
+      [
+        ...edges,
+        { id: 'h', source: 'sw', target: 'hub', source_port: 'Port 3', kind: 'fdb' },
+        { id: 'h1', source: 'hub', target: 'tv', kind: 'inferred' },
+        { id: 'h2', source: 'hub', target: 'cam2', kind: 'inferred' },
+      ],
+      [],
+      'RIGHT',
+    )
+    expect(mixed.flatMap((a) => a.members)).not.toContain('hub')
+    expect(mixed.find((a) => a.members.includes('cam2'))!.name).toBe('VLAN 20 · IOT')
+  })
+
+  it('leaves out clients it is told to (a bubble shared by networks)', () => {
+    const areas = networkAreas(nodes, edges, [], 'RIGHT', new Map(), new Set(['cam']))
+    expect(areas.flatMap((a) => a.members)).not.toContain('cam')
+  })
+
+  it('places a client by its own address, not by every VLAN of the trunk it hangs from', () => {
+    const areas = networkAreas(
+      [...nodes, client('tv', '192.168.1.70')],
+      [...edges, { id: 't', source: 'sw', target: 'tv', source_port: 'Port 1', kind: 'fdb' }],
+      [],
+      'RIGHT',
+    )
+    expect(areas.find((a) => a.members.includes('tv'))!.name).toMatch(/^LAN/)
+  })
+
+  it('leaves devices in an area the user drew to that area', () => {
+    const mine = {
+      id: 1,
+      name: 'Desk',
+      color: 'blue',
+      direction: 'RIGHT' as const,
+      x: 0,
+      y: 0,
+      width: 0,
+      height: 0,
+      members: ['pc'],
+    }
+    const lan = networkAreas(nodes, edges, [mine], 'RIGHT').filter((a) => a.name.startsWith('LAN'))
+    expect(lan.flatMap((a) => a.members)).toEqual(['phone'])
+  })
+
+  it('colors a VLAN with its catalog color, else from the palette', () => {
+    expect(networkColor({ vlan: 20 }, 0, new Map([[20, '#123456']]))).toBe('#123456')
+    expect(networkColor({}, 1)).toBe(NETWORK_PALETTE[1])
+    expect(networkColor({}, NETWORK_PALETTE.length)).toBe(NETWORK_PALETTE[0])
+    const colored = networkAreas(nodes, edges, [], 'RIGHT', new Map([[20, '#123456']]))
+    expect(colored.find((a) => a.name.startsWith('VLAN 20'))!.color).toBe('#123456')
+  })
+})
+
+describe('network suggestions', () => {
+  it('suggests 192.168.<id>.1/24, else a free 10.x network', () => {
+    expect(suggestGateway(30, [])).toBe('192.168.30.1/24')
+    expect(suggestGateway(30, ['192.168.30.0/24'])).toBe('10.0.30.1/24')
+    expect(suggestGateway(300, [])).toBe('10.1.44.1/24')
+  })
+  it('suggests .100 to .250 of a /24, the upper half of a smaller one', () => {
+    expect(suggestRange('192.168.30.1/24')).toEqual({
+      from: '192.168.30.100',
+      to: '192.168.30.250',
+    })
+    expect(suggestRange('10.0.0.1/28')).toEqual({ from: '10.0.0.8', to: '10.0.0.14' })
+    expect(suggestRange('8.8.8.1/24')).toBeUndefined()
+  })
+  it('knows the addresses of a network', () => {
+    expect(inNetwork('192.168.30.5', '192.168.30.1/24')).toBe(true)
+    expect(inNetwork('192.168.30.255', '192.168.30.1/24')).toBe(false)
+    expect(inNetwork('192.168.31.5', '192.168.30.1/24')).toBe(false)
   })
 })

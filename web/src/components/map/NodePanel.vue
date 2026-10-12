@@ -20,6 +20,7 @@ import DeviceIcon from '@/components/DeviceIcon.vue'
 import NodeIcon from '@/components/NodeIcon.vue'
 import TrafficChart from '@/components/TrafficChart.vue'
 import DeviceExtras from '@/components/map/DeviceExtras.vue'
+import NetworkPlace from '@/components/map/NetworkPlace.vue'
 import PanelSection from '@/components/map/PanelSection.vue'
 import PortPanel from '@/components/map/PortPanel.vue'
 import ResourceBars from '@/components/map/ResourceBars.vue'
@@ -790,6 +791,14 @@ async function save(patch: {
             <TrafficChart v-if="open" :node="chart.node" :iface="chart.iface" />
           </template>
         </PanelSection>
+
+        <NetworkPlace
+          :node="n"
+          :nodes="nodes"
+          :name-of="nodeName"
+          :allow-destructive="allowDestructive"
+          @applied="afterChange"
+        />
 
         <DeviceExtras v-if="n.device" :device="n.device" />
 

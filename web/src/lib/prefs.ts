@@ -20,6 +20,10 @@ export interface Prefs {
   collapsedAreas: number[]
   /** Sections of the device panel the user opened (the rest stay folded). */
   openSections: string[]
+  /** Every VLAN and subnet drawn as an area on the map. */
+  networkAreas: boolean
+  /** "Reset layout" folds every group of two or more clients (until the threshold is changed). */
+  foldAll: boolean
 }
 
 const KEY = 'omini.prefs'
@@ -43,6 +47,8 @@ function load(): Prefs {
     hideOffline: false,
     collapsedAreas: [],
     openSections: [],
+    networkAreas: true,
+    foldAll: false,
   }
   try {
     const raw = localStorage.getItem(KEY)

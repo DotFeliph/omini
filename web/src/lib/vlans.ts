@@ -11,8 +11,29 @@ export function portCarries(iface: Interface | undefined, vlan: number): boolean
   )
 }
 
-/** Every VLAN of the network: defined on a device, on a port or seen in a MAC table. */
+/**
+ * The VLANs a WAN rides on (an operator's PPPoE VLAN): a VLAN interface that
+ * is a WAN or that a WAN sits on. They are not the network's.
+ */
+export function wanVlans(nodes: TopoNode[]): Set<number> {
+  const out = new Set<number>()
+  for (const n of nodes) {
+    const ifaces = n.device?.interfaces ?? []
+    const wanOn = new Set<string>()
+    for (const i of ifaces)
+      if (i.wan) {
+        wanOn.add(i.name)
+        if (i.parent) wanOn.add(i.parent)
+      }
+    for (const i of ifaces) if (i.vlan && wanOn.has(i.name)) out.add(i.vlan)
+    for (const v of n.device?.vlans ?? []) if (v.interface && wanOn.has(v.interface)) out.add(v.id)
+  }
+  return out
+}
+
+/** Every VLAN of the network: defined on a device, on a port or seen in a MAC table (not the WAN's). */
 export function networkVlans(nodes: TopoNode[]): Vlan[] {
+  const wan = wanVlans(nodes)
   const out = new Map<number, Vlan>()
   const add = (v: Vlan) => {
     const cur = out.get(v.id)
@@ -30,7 +51,9 @@ export function networkVlans(nodes: TopoNode[]): Vlan[] {
     for (const f of d.fdb ?? []) if (f.vlan) add({ id: f.vlan })
   }
   // VLAN 1 is the default everywhere: listed only when named.
-  return [...out.values()].filter((v) => v.id !== 1 || v.name).sort((a, b) => a.id - b.id)
+  return [...out.values()]
+    .filter((v) => (v.id !== 1 || v.name) && !wan.has(v.id))
+    .sort((a, b) => a.id - b.id)
 }
 
 /**

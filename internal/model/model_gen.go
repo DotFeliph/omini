@@ -7,6 +7,7 @@ import "fmt"
 import "reflect"
 import "regexp"
 import "time"
+import "unicode/utf8"
 
 type ArpEntry struct {
 	// Interface corresponds to the JSON schema field "interface".
@@ -52,22 +53,36 @@ type Change struct {
 	Port *string `json:"port,omitempty,omitzero" yaml:"port,omitempty"`
 
 	// The new value: a boolean for port.enabled, a PortVlans object for port.vlans,
-	// {id, name} for vlan.set, {id} for vlan.delete.
+	// {id, name} for vlan.set, {id} for vlan.delete, a Network for network.set,
+	// {vlan} for network.delete, a DhcpReservation for reservation.set, {mac} for
+	// reservation.delete, a WifiChange for wifi.set, {ssid} for wifi.delete.
 	Value interface{} `json:"value" yaml:"value"`
 }
 
 type ChangeKind string
 
+const ChangeKindNetworkDelete ChangeKind = "network.delete"
+const ChangeKindNetworkSet ChangeKind = "network.set"
 const ChangeKindPortEnabled ChangeKind = "port.enabled"
 const ChangeKindPortVlans ChangeKind = "port.vlans"
+const ChangeKindReservationDelete ChangeKind = "reservation.delete"
+const ChangeKindReservationSet ChangeKind = "reservation.set"
 const ChangeKindVlanDelete ChangeKind = "vlan.delete"
 const ChangeKindVlanSet ChangeKind = "vlan.set"
+const ChangeKindWifiDelete ChangeKind = "wifi.delete"
+const ChangeKindWifiSet ChangeKind = "wifi.set"
 
 var enumValues_ChangeKind = []interface{}{
 	"port.enabled",
 	"port.vlans",
 	"vlan.set",
 	"vlan.delete",
+	"network.set",
+	"network.delete",
+	"reservation.set",
+	"reservation.delete",
+	"wifi.set",
+	"wifi.delete",
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -134,6 +149,9 @@ type Device struct {
 	// Usage of each DHCP range.
 	DhcpPools []DhcpPool `json:"dhcp_pools,omitempty,omitzero" yaml:"dhcp_pools,omitempty"`
 
+	// Fixed addresses the DHCP server hands out (reservations).
+	DhcpReservations []DhcpReservation `json:"dhcp_reservations,omitempty,omitzero" yaml:"dhcp_reservations,omitempty"`
+
 	// DNS checks of the servers of this network (network scan).
 	DnsChecks []DnsCheck `json:"dns_checks,omitempty,omitzero" yaml:"dns_checks,omitempty"`
 
@@ -190,6 +208,10 @@ type Device struct {
 	// Neighbors corresponds to the JSON schema field "neighbors".
 	Neighbors []Neighbor `json:"neighbors,omitempty,omitzero" yaml:"neighbors,omitempty"`
 
+	// Networks the router serves (each VLAN's interface, gateway, DHCP and access);
+	// VLAN 1 is the untagged LAN.
+	Networks []Network `json:"networks,omitempty,omitzero" yaml:"networks,omitempty"`
+
 	// OSVersion corresponds to the JSON schema field "os_version".
 	OSVersion *string `json:"os_version,omitempty,omitzero" yaml:"os_version,omitempty"`
 
@@ -222,6 +244,10 @@ type Device struct {
 
 	// VPN tunnels and peers.
 	VpnPeers []VpnPeer `json:"vpn_peers,omitempty,omitzero" yaml:"vpn_peers,omitempty"`
+
+	// Wi-Fi networks the device (an access point, or a controller for its site)
+	// broadcasts, with their VLAN.
+	WifiNetworks []WifiNetwork `json:"wifi_networks,omitempty,omitzero" yaml:"wifi_networks,omitempty"`
 
 	// WirelessClients corresponds to the JSON schema field "wireless_clients".
 	WirelessClients []WirelessClient `json:"wireless_clients,omitempty,omitzero" yaml:"wireless_clients,omitempty"`
@@ -465,6 +491,39 @@ func (j *DhcpPool) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	*j = DhcpPool(plain)
+	return nil
+}
+
+// A fixed address the DHCP server hands out to one MAC.
+type DhcpReservation struct {
+	// IPv4 address.
+	IP string `json:"ip" yaml:"ip"`
+
+	// MAC corresponds to the JSON schema field "mac".
+	MAC MACAddress `json:"mac" yaml:"mac"`
+
+	// Host name given with it.
+	Name *string `json:"name,omitempty,omitzero" yaml:"name,omitempty"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *DhcpReservation) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["ip"]; raw != nil && !ok {
+		return fmt.Errorf("field ip in DhcpReservation: required")
+	}
+	if _, ok := raw["mac"]; raw != nil && !ok {
+		return fmt.Errorf("field mac in DhcpReservation: required")
+	}
+	type Plain DhcpReservation
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = DhcpReservation(plain)
 	return nil
 }
 
@@ -1192,6 +1251,127 @@ func (j *Neighbor) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// A VLAN's network on a router: its interface, gateway, DHCP range, access and
+// discovery.
+type Network struct {
+	// Access corresponds to the JSON schema field "access".
+	Access *NetworkAccess `json:"access,omitempty,omitzero" yaml:"access,omitempty"`
+
+	// Its device ("vlan0.30", "igb1").
+	Device *string `json:"device,omitempty,omitzero" yaml:"device,omitempty"`
+
+	// Dhcp corresponds to the JSON schema field "dhcp".
+	Dhcp *NetworkDhcp `json:"dhcp,omitempty,omitzero" yaml:"dhcp,omitempty"`
+
+	// The router's address with the prefix, e.g. "192.168.30.1/24".
+	Gateway *string `json:"gateway,omitempty,omitzero" yaml:"gateway,omitempty"`
+
+	// The router's name for the interface ("lan", "opt3"), empty when the router has
+	// none yet.
+	Interface *string `json:"interface,omitempty,omitzero" yaml:"interface,omitempty"`
+
+	// Discovery (mDNS) repeated to and from the other networks that have it.
+	Mdns *bool `json:"mdns,omitempty,omitzero" yaml:"mdns,omitempty"`
+
+	// The interface's description ("IOT").
+	Name *string `json:"name,omitempty,omitzero" yaml:"name,omitempty"`
+
+	// The port the VLAN rides on ("igb1"); empty: the router's port toward the
+	// switches.
+	Parent *string `json:"parent,omitempty,omitzero" yaml:"parent,omitempty"`
+
+	// The VLAN; 1 is the untagged LAN.
+	Vlan uint16 `json:"vlan" yaml:"vlan"`
+}
+
+type NetworkAccess string
+
+const NetworkAccessAll NetworkAccess = "all"
+const NetworkAccessCustom NetworkAccess = "custom"
+const NetworkAccessInternet NetworkAccess = "internet"
+const NetworkAccessLocal NetworkAccess = "local"
+
+var enumValues_NetworkAccess = []interface{}{
+	"internet",
+	"all",
+	"local",
+	"custom",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *NetworkAccess) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_NetworkAccess {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_NetworkAccess, v)
+	}
+	*j = NetworkAccess(v)
+	return nil
+}
+
+// A network's DHCP: on or off and its range.
+type NetworkDhcp struct {
+	// Enabled corresponds to the JSON schema field "enabled".
+	Enabled bool `json:"enabled" yaml:"enabled"`
+
+	// First address of the range.
+	From *string `json:"from,omitempty,omitzero" yaml:"from,omitempty"`
+
+	// Last address of the range.
+	To *string `json:"to,omitempty,omitzero" yaml:"to,omitempty"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *NetworkDhcp) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["enabled"]; raw != nil && !ok {
+		return fmt.Errorf("field enabled in NetworkDhcp: required")
+	}
+	type Plain NetworkDhcp
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = NetworkDhcp(plain)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *Network) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["vlan"]; raw != nil && !ok {
+		return fmt.Errorf("field vlan in Network: required")
+	}
+	type Plain Network
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if 4094 < plain.Vlan {
+		return fmt.Errorf("field %s: must be <= %v", "vlan", 4094)
+	}
+	if 1 > plain.Vlan {
+		return fmt.Errorf("field %s: must be >= %v", "vlan", 1)
+	}
+	*j = Network(plain)
+	return nil
+}
+
 type PluginAction string
 
 const PluginActionApply PluginAction = "apply"
@@ -1763,6 +1943,129 @@ func (j *WifiBand) UnmarshalJSON(value []byte) error {
 		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_WifiBand, v)
 	}
 	*j = WifiBand(v)
+	return nil
+}
+
+// A Wi-Fi network to create or change (wifi.set). previous renames one; an empty
+// password keeps the current one.
+type WifiChange struct {
+	// Enabled corresponds to the JSON schema field "enabled".
+	Enabled *bool `json:"enabled,omitempty,omitzero" yaml:"enabled,omitempty"`
+
+	// WPA2 passphrase, 8 to 63 characters; empty keeps the current one. Never kept in
+	// Omini.
+	Password *string `json:"password,omitempty,omitzero" yaml:"password,omitempty"`
+
+	// Its current name, when it is renamed.
+	Previous *string `json:"previous,omitempty,omitzero" yaml:"previous,omitempty"`
+
+	// SSID corresponds to the JSON schema field "ssid".
+	SSID string `json:"ssid" yaml:"ssid"`
+
+	// Vlan corresponds to the JSON schema field "vlan".
+	Vlan *uint16 `json:"vlan,omitempty,omitzero" yaml:"vlan,omitempty"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *WifiChange) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["ssid"]; raw != nil && !ok {
+		return fmt.Errorf("field ssid in WifiChange: required")
+	}
+	type Plain WifiChange
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.SSID)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "ssid", 1)
+	}
+	if utf8.RuneCountInString(string(plain.SSID)) > 32 {
+		return fmt.Errorf("field %s length: must be <= %d", "ssid", 32)
+	}
+	if plain.Vlan != nil && 4094 < *plain.Vlan {
+		return fmt.Errorf("field %s: must be <= %v", "vlan", 4094)
+	}
+	if plain.Vlan != nil && 1 > *plain.Vlan {
+		return fmt.Errorf("field %s: must be >= %v", "vlan", 1)
+	}
+	*j = WifiChange(plain)
+	return nil
+}
+
+// A Wi-Fi network (SSID) and the VLAN it puts its clients in.
+type WifiNetwork struct {
+	// Enabled corresponds to the JSON schema field "enabled".
+	Enabled *bool `json:"enabled,omitempty,omitzero" yaml:"enabled,omitempty"`
+
+	// How it is secured.
+	Security *WifiNetworkSecurity `json:"security,omitempty,omitzero" yaml:"security,omitempty"`
+
+	// SSID corresponds to the JSON schema field "ssid".
+	SSID string `json:"ssid" yaml:"ssid"`
+
+	// The VLAN of its clients; empty: the untagged LAN.
+	Vlan *uint16 `json:"vlan,omitempty,omitzero" yaml:"vlan,omitempty"`
+}
+
+type WifiNetworkSecurity string
+
+const WifiNetworkSecurityOpen WifiNetworkSecurity = "open"
+const WifiNetworkSecurityWpa2 WifiNetworkSecurity = "wpa2"
+const WifiNetworkSecurityWpa2Wpa3 WifiNetworkSecurity = "wpa2wpa3"
+const WifiNetworkSecurityWpa3 WifiNetworkSecurity = "wpa3"
+
+var enumValues_WifiNetworkSecurity = []interface{}{
+	"open",
+	"wpa2",
+	"wpa3",
+	"wpa2wpa3",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *WifiNetworkSecurity) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_WifiNetworkSecurity {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_WifiNetworkSecurity, v)
+	}
+	*j = WifiNetworkSecurity(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *WifiNetwork) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["ssid"]; raw != nil && !ok {
+		return fmt.Errorf("field ssid in WifiNetwork: required")
+	}
+	type Plain WifiNetwork
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if plain.Vlan != nil && 4094 < *plain.Vlan {
+		return fmt.Errorf("field %s: must be <= %v", "vlan", 4094)
+	}
+	if plain.Vlan != nil && 1 > *plain.Vlan {
+		return fmt.Errorf("field %s: must be >= %v", "vlan", 1)
+	}
+	*j = WifiNetwork(plain)
 	return nil
 }
 

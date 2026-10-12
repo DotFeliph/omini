@@ -248,3 +248,26 @@ def test_disable_and_enable_a_port() -> None:
         ap = devices(emu.collect("omada"))["br-ap01"]
         bad = {"device": ap["key"], "kind": "port.enabled", "port": "ETH1", "value": False}
         assert "only switch ports" in emu.collect("omada", "apply", change=bad)["error"]
+
+
+def test_a_vlans_wifi() -> None:
+    with Emulator(at=TUE, apis=["omada"], world=World()) as emu:
+
+        def wifi(res: dict) -> dict[str, dict]:
+            assert "error" not in res, res.get("error")
+            ap = next(d for d in res["devices"] if d.get("role") == "ap")
+            return {w["ssid"]: w for w in ap.get("wifi_networks") or []}
+
+        before = wifi(emu.collect("omada"))
+        assert before and all(w.get("vlan") for w in before.values())
+        change = {
+            "device": "x",
+            "kind": "wifi.set",
+            "value": {"ssid": "Filial-Lab", "vlan": 77, "password": "correct horse"},
+        }
+        got = wifi(emu.collect("omada", "apply", change=change))
+        assert got["Filial-Lab"]["vlan"] == 77
+        change = {"device": "x", "kind": "wifi.set", "value": {"ssid": "Filial-Lab", "enabled": False}}
+        assert wifi(emu.collect("omada", "apply", change=change))["Filial-Lab"]["enabled"] is False
+        change = {"device": "x", "kind": "wifi.delete", "value": {"ssid": "Filial-Lab"}}
+        assert "Filial-Lab" not in wifi(emu.collect("omada", "apply", change=change))

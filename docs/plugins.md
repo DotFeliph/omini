@@ -105,6 +105,12 @@ changes:                    # optional: the changes `apply` supports
   - port.vlans              # a port's VLANs: {untagged, tagged}
   - vlan.set                # create or rename a VLAN: {id, name}
   - vlan.delete             # delete a VLAN: {id}
+  - network.set             # a router's VLAN network: {vlan, name, parent, gateway, dhcp, access, mdns}
+  - network.delete          # remove it: {vlan}
+  - reservation.set         # a fixed address: {mac, ip, name}
+  - reservation.delete      # {mac}
+  - wifi.set                # a Wi-Fi network: {ssid, previous, vlan, password, enabled}
+  - wifi.delete             # {ssid}
 fields:                     # the "add integration" form
   - key: url
     type: url

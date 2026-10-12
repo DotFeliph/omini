@@ -140,7 +140,7 @@ These are remembered per browser, not per user:
 
 - the map orientation (left to right or top down),
 - which groups and areas are folded or unfolded,
-- "Hide offline" on the map,
+- whether offline devices show on the map,
 - the sidebar (compact or expanded),
 - the theme and the client grouping threshold,
 - alert popups you closed.

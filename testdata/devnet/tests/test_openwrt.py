@@ -228,7 +228,7 @@ def test_raw_api(world: World) -> None:
         }
         # Outside the ACL: other uci configs (rpcd's uci check), other ubus methods and any other file (rpcd's path
         # check).
-        assert rpc(url, sid, "uci", "get", {"config": "wireless"})["result"] == [openwrt.PERMISSION_DENIED]
+        assert rpc(url, sid, "uci", "get", {"config": "dhcp"})["result"] == [openwrt.PERMISSION_DENIED]
         assert rpc(url, sid, "uci", "commit", {"config": "network"})["error"]["code"] == -32002
         assert rpc(url, sid, "uci", "get", {"config": "network", "section": "lan", "option": "proto"})["result"] == [
             0,
@@ -292,3 +292,23 @@ def test_a_read_only_acl_maps_but_does_not_change(monkeypatch: pytest.MonkeyPatc
         assert "the ACL of user 'omini' does not allow changes (ubus uci revert)" in out["error"]
         assert "list write 'omini'" in out["error"]
         assert ifaces(device(emu.collect(API)))["lan3"]["enabled"] is True
+
+
+def test_a_wifi_on_the_lan() -> None:
+    with Emulator(at=THU_16, apis=[API], world=World()) as emu:
+
+        def wifi(res: dict) -> dict[str, dict]:
+            assert "error" not in res, res.get("error")
+            return {w["ssid"]: w for w in res["devices"][0].get("wifi_networks") or []}
+
+        before = wifi(emu.collect(API))
+        assert before
+        change = {
+            "device": "x",
+            "kind": "wifi.set",
+            "value": {"ssid": "Loja-Lab", "vlan": 1, "password": "correct horse"},
+        }
+        got = wifi(emu.collect(API, "apply", change=change))
+        assert "Loja-Lab" in got and got["Loja-Lab"].get("vlan") is None  # the LAN
+        change = {"device": "x", "kind": "wifi.delete", "value": {"ssid": "Loja-Lab"}}
+        assert "Loja-Lab" not in wifi(emu.collect(API, "apply", change=change))

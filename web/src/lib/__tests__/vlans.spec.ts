@@ -69,6 +69,25 @@ describe('VLANs', () => {
     ])
   })
 
+  it("leaves out the VLAN the operator's PPPoE rides on", () => {
+    const fw: TopoNode = {
+      id: 'fw2',
+      kind: 'device',
+      label: 'fw2',
+      online: true,
+      device: {
+        key: 'fw2',
+        name: 'fw2',
+        interfaces: [
+          { name: 'vlan0.2000', vlan: 2000, parent: 're0' },
+          { name: 'pppoe1', parent: 'vlan0.2000', wan: true },
+        ],
+        vlans: [{ id: 2000, interface: 'vlan0.2000' }],
+      },
+    }
+    expect(networkVlans([...nodes, fw]).map((v) => v.id)).toEqual([20, 30])
+  })
+
   it('knows which ports carry a VLAN', () => {
     expect(portCarries({ name: 'x', vlans: { tagged: [20] } }, 20)).toBe(true)
     expect(portCarries({ name: 'x', vlan: 20 }, 20)).toBe(true)

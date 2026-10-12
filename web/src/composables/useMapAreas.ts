@@ -177,6 +177,7 @@ export function useMapAreas(options: {
       const cy = d.y + d.height / 2
       let best: { id: number; size: number } | undefined
       for (const [id, r] of Object.entries(rects)) {
+        if (Number(id) < 0) continue // a network's area: devices are not put in it by hand
         if (cx < r.x || cx > r.x + r.width || cy < r.y || cy > r.y + r.height) continue
         if (!best || r.width * r.height < best.size)
           best = { id: Number(id), size: r.width * r.height }
@@ -184,6 +185,7 @@ export function useMapAreas(options: {
       if (best) home.set(d.id, best.id)
     }
     for (const a of liveAreas.value) {
+      if (a.auto) continue
       const rect = rects[a.id]
       if (!rect) continue
       const members = [

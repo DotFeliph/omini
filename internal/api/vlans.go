@@ -19,6 +19,15 @@ import (
 type vlanView struct {
 	store.Vlan
 	Devices []vlanOnDevice `json:"devices"`
+	Wifi    []vlanWifi     `json:"wifi"`
+}
+
+// vlanWifi is a Wi-Fi network that puts its clients in the VLAN.
+type vlanWifi struct {
+	SSID     string   `json:"ssid"`
+	Enabled  bool     `json:"enabled"`
+	Security string   `json:"security,omitempty"`
+	Nodes    []string `json:"nodes"` // the access points (or controllers) that broadcast it
 }
 
 type vlanOnDevice struct {
@@ -37,7 +46,7 @@ func (s *Server) listVlans(w http.ResponseWriter, r *http.Request) {
 	topo := s.Collector.State().Topology
 	out := make([]vlanView, len(catalog))
 	for i, v := range catalog {
-		out[i] = vlanView{Vlan: v, Devices: vlanDevices(topo, v.ID)}
+		out[i] = vlanView{Vlan: v, Devices: vlanDevices(topo, v.ID), Wifi: vlanWifis(topo, v.ID)}
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -67,6 +76,32 @@ func vlanDevices(topo topology.Topology, id uint16) []vlanOnDevice {
 	return out
 }
 
+func vlanWifis(topo topology.Topology, id uint16) []vlanWifi {
+	out := []vlanWifi{}
+	for _, n := range topo.Nodes {
+		if n.Device == nil {
+			continue
+		}
+		for _, w := range n.Device.WifiNetworks {
+			vid := model.Deref(w.Vlan)
+			if vid == 0 {
+				vid = 1
+			}
+			if vid != id {
+				continue
+			}
+			i := slices.IndexFunc(out, func(x vlanWifi) bool { return x.SSID == w.SSID })
+			if i < 0 {
+				out = append(out, vlanWifi{SSID: w.SSID, Security: string(model.Deref(w.Security)), Nodes: []string{}})
+				i = len(out) - 1
+			}
+			out[i].Enabled = out[i].Enabled || w.Enabled == nil || *w.Enabled
+			out[i].Nodes = append(out[i].Nodes, n.ID)
+		}
+	}
+	return out
+}
+
 func vlanID(w http.ResponseWriter, r *http.Request) (uint16, bool) {
 	id, err := strconv.ParseUint(r.PathValue("id"), 10, 16)
 	if err != nil || id < 1 || id > 4094 {
@@ -76,8 +111,15 @@ func vlanID(w http.ResponseWriter, r *http.Request) (uint16, bool) {
 	return uint16(id), true
 }
 
+// vlanInput is a VLAN to create, with the second confirmation of a
+// destructive router change.
+type vlanInput struct {
+	store.Vlan
+	Confirm bool `json:"confirm"`
+}
+
 func (s *Server) createVlan(w http.ResponseWriter, r *http.Request) {
-	var in store.Vlan
+	var in vlanInput
 	if !readJSON(w, r, &in) {
 		return
 	}
@@ -90,7 +132,7 @@ func (s *Server) createVlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "the network already has this VLAN")
 		return
 	}
-	s.saveVlan(w, r, in, http.StatusCreated)
+	s.saveVlan(w, r, in.Vlan, in.Confirm, http.StatusCreated)
 }
 
 func (s *Server) updateVlan(w http.ResponseWriter, r *http.Request) {
@@ -109,9 +151,11 @@ func (s *Server) updateVlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Name   *string `json:"name"`
-		Color  *string `json:"color"`
-		Subnet *string `json:"subnet"`
+		Name    *string        `json:"name"`
+		Color   *string        `json:"color"`
+		Subnet  *string        `json:"subnet"`
+		Network *model.Network `json:"network"`
+		Confirm bool           `json:"confirm"`
 	}
 	if !readJSON(w, r, &in) {
 		return
@@ -126,15 +170,19 @@ func (s *Server) updateVlan(w http.ResponseWriter, r *http.Request) {
 	if in.Subnet != nil {
 		v.Subnet = *in.Subnet
 	}
-	s.saveVlan(w, r, v, http.StatusOK)
+	if in.Network != nil {
+		v.Network = in.Network
+	}
+	s.saveVlan(w, r, v, in.Confirm, http.StatusOK)
 }
 
-// saveVlan stores a VLAN and renames it on the devices that have it; a device
-// refusing answers 502 with the changes made.
-func (s *Server) saveVlan(w http.ResponseWriter, r *http.Request, v store.Vlan, status int) {
+// saveVlan applies a VLAN's network to the router, stores it and renames it
+// on the devices that have it; a device refusing answers 502 with the
+// changes made.
+func (s *Server) saveVlan(w http.ResponseWriter, r *http.Request, v store.Vlan, confirm bool, status int) {
 	ctx, cancel := changeContext(r)
 	defer cancel()
-	saved, done, err := s.Collector.SaveVlan(ctx, v)
+	saved, done, err := s.Collector.SaveVlan(ctx, v, confirm)
 	switch {
 	case errors.Is(err, store.ErrInvalidVlan):
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -154,7 +202,7 @@ func (s *Server) deleteVlan(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := changeContext(r)
 	defer cancel()
-	done, err := s.Collector.DeleteVlan(ctx, id)
+	done, err := s.Collector.DeleteVlan(ctx, id, r.URL.Query().Get("confirm") == "1")
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writeError(w, http.StatusNotFound, "no such VLAN")
@@ -234,4 +282,71 @@ func nonNil(list []store.ConfigChange) []store.ConfigChange {
 		return []store.ConfigChange{}
 	}
 	return list
+}
+
+// reserve fixes a device's address on the router whose network holds it.
+func (s *Server) reserve(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		IP string `json:"ip"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	ctx, cancel := changeContext(r)
+	defer cancel()
+	rec, err := s.Collector.Reserve(ctx, r.PathValue("id"), in.IP)
+	if err != nil {
+		s.changeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rec)
+}
+
+// unreserve removes a device's fixed address from the router.
+func (s *Server) unreserve(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := changeContext(r)
+	defer cancel()
+	rec, err := s.Collector.Unreserve(ctx, r.PathValue("id"))
+	if err != nil {
+		s.changeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rec)
+}
+
+// setWifi creates or changes a Wi-Fi network on every controller and
+// access point that can; the password is passed on, never kept.
+func (s *Server) setWifi(w http.ResponseWriter, r *http.Request) {
+	var in model.WifiChange
+	if !readJSON(w, r, &in) {
+		return
+	}
+	ctx, cancel := changeContext(r)
+	defer cancel()
+	done, err := s.Collector.SetWifi(ctx, in)
+	if err != nil && len(done) > 0 {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "changes": done})
+		return
+	}
+	if err != nil {
+		s.changeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"changes": nonNil(done)})
+}
+
+// deleteWifi removes a Wi-Fi network from every device that broadcasts it.
+func (s *Server) deleteWifi(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := changeContext(r)
+	defer cancel()
+	done, err := s.Collector.DeleteWifi(ctx, r.PathValue("ssid"))
+	if err != nil && len(done) > 0 {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "changes": done})
+		return
+	}
+	if err != nil {
+		s.changeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"changes": nonNil(done)})
 }

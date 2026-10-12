@@ -73,9 +73,20 @@ class Change(BaseModel):
     """
     Key of the device, as the plugin reported it.
     """
-    kind: Literal["port.enabled", "port.vlans", "vlan.set", "vlan.delete"]
+    kind: Literal[
+        "port.enabled",
+        "port.vlans",
+        "vlan.set",
+        "vlan.delete",
+        "network.set",
+        "network.delete",
+        "reservation.set",
+        "reservation.delete",
+        "wifi.set",
+        "wifi.delete",
+    ]
     """
-    A configuration change Omini knows. port.enabled: enable (true) or disable (false) a port. port.vlans: the port's VLANs, a PortVlans (access: untagged only; trunk: untagged as the native VLAN, or none, and the tagged list), only VLANs the device has. vlan.set: create a VLAN on the device, or rename it ({id, name}). vlan.delete: delete a VLAN from the device ({id}).
+    A configuration change Omini knows. port.enabled: enable (true) or disable (false) a port. port.vlans: the port's VLANs, a PortVlans (access: untagged only; trunk: untagged as the native VLAN, or none, and the tagged list), only VLANs the device has. vlan.set: create a VLAN on the device, or rename it ({id, name}). vlan.delete: delete a VLAN from the device ({id}). network.set: create or change a VLAN's network on the router (a Network: interface, gateway, DHCP, access, mDNS). network.delete: remove it ({vlan}). reservation.set: a fixed address for a MAC on the router's DHCP (a DhcpReservation). reservation.delete: remove it ({mac}). wifi.set: create or change a Wi-Fi network (a WifiChange: its name, VLAN, password, on or off). wifi.delete: remove it ({ssid}).
     """
     port: str | None = None
     """
@@ -83,7 +94,7 @@ class Change(BaseModel):
     """
     value: Any
     """
-    The new value: a boolean for port.enabled, a PortVlans object for port.vlans, {id, name} for vlan.set, {id} for vlan.delete.
+    The new value: a boolean for port.enabled, a PortVlans object for port.vlans, {id, name} for vlan.set, {id} for vlan.delete, a Network for network.set, {vlan} for network.delete, a DhcpReservation for reservation.set, {mac} for reservation.delete, a WifiChange for wifi.set, {ssid} for wifi.delete.
     """
 
 
@@ -273,6 +284,66 @@ class Vlan(BaseModel):
     """
     e.g. "192.168.20.0/24".
     """
+
+
+class NetworkDhcp(BaseModel):
+    """
+    A network's DHCP: on or off and its range.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    enabled: bool
+    from_: Annotated[str | None, Field(alias="from")] = None
+    """
+    First address of the range.
+    """
+    to: str | None = None
+    """
+    Last address of the range.
+    """
+
+
+class WifiNetwork(BaseModel):
+    """
+    A Wi-Fi network (SSID) and the VLAN it puts its clients in.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    ssid: str
+    vlan: Annotated[int | None, Field(ge=1, le=4094)] = None
+    """
+    The VLAN of its clients; empty: the untagged LAN.
+    """
+    security: Literal["open", "wpa2", "wpa3", "wpa2wpa3"] | None = None
+    """
+    How it is secured.
+    """
+    enabled: bool | None = None
+
+
+class WifiChange(BaseModel):
+    """
+    A Wi-Fi network to create or change (wifi.set). previous renames one; an empty password keeps the current one.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    ssid: Annotated[str, Field(max_length=32, min_length=1)]
+    previous: str | None = None
+    """
+    Its current name, when it is renamed.
+    """
+    vlan: Annotated[int | None, Field(ge=1, le=4094)] = None
+    password: str | None = None
+    """
+    WPA2 passphrase, 8 to 63 characters; empty keeps the current one. Never kept in Omini.
+    """
+    enabled: bool | None = None
 
 
 class Service(BaseModel):
@@ -605,7 +676,23 @@ class PluginManifest(BaseModel):
     author: str | None = None
     homepage: str | None = None
     fields: list[FormField] | None = None
-    changes: list[Literal["port.enabled", "port.vlans", "vlan.set", "vlan.delete"]] | None = None
+    changes: (
+        list[
+            Literal[
+                "port.enabled",
+                "port.vlans",
+                "vlan.set",
+                "vlan.delete",
+                "network.set",
+                "network.delete",
+                "reservation.set",
+                "reservation.delete",
+                "wifi.set",
+                "wifi.delete",
+            ]
+        ]
+        | None
+    ) = None
     """
     Configuration changes the plugin can apply (action apply).
     """
@@ -688,6 +775,68 @@ class Host(BaseModel):
     Web interfaces found on the host, one per port.
     """
     dhcp: DhcpFingerprint | None = None
+
+
+class Network(BaseModel):
+    """
+    A VLAN's network on a router: its interface, gateway, DHCP range, access and discovery.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    vlan: Annotated[int, Field(ge=1, le=4094)]
+    """
+    The VLAN; 1 is the untagged LAN.
+    """
+    name: str | None = None
+    """
+    The interface's description ("IOT").
+    """
+    interface: str | None = None
+    """
+    The router's name for the interface ("lan", "opt3"), empty when the router has none yet.
+    """
+    device: str | None = None
+    """
+    Its device ("vlan0.30", "igb1").
+    """
+    parent: str | None = None
+    """
+    The port the VLAN rides on ("igb1"); empty: the router's port toward the switches.
+    """
+    gateway: str | None = None
+    """
+    The router's address with the prefix, e.g. "192.168.30.1/24".
+    """
+    dhcp: NetworkDhcp | None = None
+    access: Literal["internet", "all", "local", "custom"] | None = None
+    """
+    What a network reaches through the router. internet: the internet, no other network. all: the internet and every other network. local: its own network only. custom: rules set by hand that are none of these (reported only, never set).
+    """
+    mdns: bool | None = None
+    """
+    Discovery (mDNS) repeated to and from the other networks that have it.
+    """
+
+
+class DhcpReservation(BaseModel):
+    """
+    A fixed address the DHCP server hands out to one MAC.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    mac: Any
+    ip: str
+    """
+    IPv4 address.
+    """
+    name: str | None = None
+    """
+    Host name given with it.
+    """
 
 
 class DhcpCheck(BaseModel):
@@ -799,6 +948,14 @@ class Device(BaseModel):
     """
     VLANs defined on the device.
     """
+    networks: list[Network] | None = None
+    """
+    Networks the router serves (each VLAN's interface, gateway, DHCP and access); VLAN 1 is the untagged LAN.
+    """
+    wifi_networks: list[WifiNetwork] | None = None
+    """
+    Wi-Fi networks the device (an access point, or a controller for its site) broadcasts, with their VLAN.
+    """
     services: list[Service] | None = None
     """
     Services running (or stopped) on the device.
@@ -810,6 +967,10 @@ class Device(BaseModel):
     dhcp_pools: list[DhcpPool] | None = None
     """
     Usage of each DHCP range.
+    """
+    dhcp_reservations: list[DhcpReservation] | None = None
+    """
+    Fixed addresses the DHCP server hands out (reservations).
     """
     dhcp_checks: list[DhcpCheck] | None = None
     """

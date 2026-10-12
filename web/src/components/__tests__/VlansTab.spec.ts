@@ -1,11 +1,10 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createMemoryHistory, createRouter } from 'vue-router'
 
 import { api } from '@/lib/api'
 
-import { plugins } from '../../components/__tests__/helpers'
-import VlansView from '../VlansView.vue'
+import VlansTab from '../map/VlansTab.vue'
+import { plugins } from './helpers'
 
 vi.mock('@/lib/api', async (orig) => {
   const mod = await orig<typeof import('@/lib/api')>()
@@ -22,18 +21,14 @@ vi.mock('@/lib/api', async (orig) => {
   }
 })
 
-function mountView() {
-  const router = createRouter({
-    history: createMemoryHistory(),
-    routes: [
-      { path: '/', name: 'map', component: { template: '<div />' } },
-      { path: '/vlans', component: VlansView },
-    ],
+function mountView(props = {}) {
+  return mount(VlansTab, {
+    props: { groups: [], colors: new Map<string, string>(), ...props },
+    global: { plugins: plugins() },
   })
-  return mount(VlansView, { global: { plugins: [...plugins(), router] } })
 }
 
-describe('VlansView', () => {
+describe('VlansTab', () => {
   beforeEach(() => {
     vi.mocked(api.vlans).mockResolvedValue([
       {
@@ -91,6 +86,28 @@ describe('VlansView', () => {
     expect(api.deleteVlan).not.toHaveBeenCalled()
     await del.trigger('click')
     await flushPromises()
-    expect(api.deleteVlan).toHaveBeenCalledWith(20)
+    expect(api.deleteVlan).toHaveBeenCalledWith(20, false)
+  })
+
+  it('highlights a VLAN or a subnet on the map with a click, and lists the subnets', async () => {
+    const groups = [
+      { key: 'vlan:1', name: 'VLAN 1', vlan: 1, members: new Set(['dev:sw']) },
+      {
+        key: 'subnet:10.0.5.0/24',
+        name: 'LAB · 10.0.5.0/24',
+        label: 'LAB',
+        cidr: '10.0.5.0/24',
+        members: new Set(['a', 'b']),
+      },
+    ]
+    const w = mountView({ groups })
+    await flushPromises()
+    await w.get('[data-net="vlan:1"]').trigger('click')
+    expect(w.emitted('pick')).toEqual([['vlan:1']])
+    expect(w.get('[data-test=subnets]').text()).toContain('LAB')
+    expect(w.get('[data-test=subnets]').text()).toContain('2')
+    await w.setProps({ picked: 'subnet:10.0.5.0/24' })
+    await w.get('[data-net="subnet:10.0.5.0/24"]').trigger('click')
+    expect(w.emitted('pick')![1]).toEqual([undefined])
   })
 })

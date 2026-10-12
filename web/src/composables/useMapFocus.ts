@@ -3,6 +3,7 @@ import { ref, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import type { GraphView } from '@/lib/graph'
+import type { MenuTab } from '@/components/map/DevicesDrawer.vue'
 import type { TopoNode } from '@/lib/types'
 
 /**
@@ -32,9 +33,13 @@ export function useMapFocus(options: {
     focusNode(id)
   }
 
-  // The device list: a drawer on the map ("N devices"); /devices opens it too.
-  const devicesOpen = ref(route.query.devices === '1')
-  if (devicesOpen.value) void router.replace({ query: { ...route.query, devices: undefined } })
+  // The map's menu, a drawer: /devices opens it on the devices, ?menu=<tab> on a tab.
+  const tabs = ['devices', 'vlans', 'services'] as const
+  const asked = tabs.find((t) => t === route.query.menu)
+  const menuTab = ref<MenuTab>(asked ?? 'devices')
+  const devicesOpen = ref(route.query.devices === '1' || !!asked)
+  if (devicesOpen.value)
+    void router.replace({ query: { ...route.query, devices: undefined, menu: undefined } })
   function showDevice(id: string) {
     devicesOpen.value = false
     focused = undefined
@@ -55,5 +60,5 @@ export function useMapFocus(options: {
     }, 600)
   }
 
-  return { devicesOpen, showDevice, focusRequested }
+  return { devicesOpen, menuTab, showDevice, focusRequested }
 }

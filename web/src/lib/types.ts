@@ -150,6 +150,12 @@ export interface Device {
   fdb?: { mac: string; port: string; vlan?: number }[]
   serial?: string
   vlans?: Vlan[]
+  /** The networks a router serves (26.7+ OPNsense). */
+  networks?: Network[]
+  /** Wi-Fi networks it broadcasts (an access point, or a controller for its site). */
+  wifi_networks?: { ssid: string; vlan?: number; security?: string; enabled?: boolean }[]
+  /** Fixed addresses its DHCP hands out. */
+  dhcp_reservations?: { mac: string; ip: string; name?: string }[]
   services?: Service[]
   vpn_peers?: VpnPeer[]
   dhcp_pools?: { network: string; total?: number; used?: number }[]
@@ -285,6 +291,8 @@ export interface MapArea {
   members: string[]
   /** Hidden from the map (shown again with "Show hidden"). */
   hidden?: boolean
+  /** A VLAN's or subnet's area, made by Omini (not stored, not editable). */
+  auto?: boolean
 }
 
 export type FieldType = 'string' | 'secret' | 'host' | 'url' | 'int' | 'bool' | 'select'
@@ -500,7 +508,34 @@ export interface FlowsResponse {
 }
 
 /** A configuration change Omini can apply to a device. */
-export type ChangeKind = 'port.enabled' | 'port.vlans' | 'vlan.set' | 'vlan.delete'
+export type ChangeKind =
+  | 'port.enabled'
+  | 'port.vlans'
+  | 'vlan.set'
+  | 'vlan.delete'
+  | 'network.set'
+  | 'network.delete'
+  | 'reservation.set'
+  | 'reservation.delete'
+  | 'wifi.set'
+  | 'wifi.delete'
+
+/** What a network reaches through the router; custom: rules set by hand (reported only). */
+export type NetworkAccess = 'internet' | 'all' | 'local' | 'custom'
+
+/** A VLAN's network on the router: its gateway, DHCP and access (VLAN 1 is the LAN). */
+export interface Network {
+  vlan: number
+  name?: string
+  interface?: string
+  device?: string
+  parent?: string
+  /** "192.168.30.1/24" */
+  gateway?: string
+  dhcp?: { enabled: boolean; from?: string; to?: string }
+  access?: NetworkAccess
+  mdns?: boolean
+}
 
 /**
  * Why disabling a port is destructive: Omini reaches the device through it, or
@@ -572,6 +607,10 @@ export interface NetworkVlan {
   name: string
   color?: string
   subnet?: string
+  /** Its network on the router, when one serves it. */
+  network?: Network
+  /** The Wi-Fi networks that put their clients in it, and the devices broadcasting each. */
+  wifi?: { ssid: string; enabled: boolean; security?: string; nodes: string[] }[]
   devices: { node_id: string; name?: string; untagged: string[]; tagged: string[] }[]
 }
 

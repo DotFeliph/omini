@@ -84,6 +84,9 @@ class Omada(HttpService):
         oid = self.omadac_id
         self.site_id = hashlib.sha256(f"site:{oid}:branch".encode()).hexdigest()[:24]
         self.site = self.node_obj.site
+        # The site's SSIDs once the Wi-Fi API is used (else from the design).
+        self.ssids: list[dict[str, Any]] | None = None
+        self.ssid_ids = 0
 
     # -- identity -----------------------------------------------------------
 
@@ -146,6 +149,8 @@ class Omada(HttpService):
                     "The access token has expired. Please re-initiate the refreshToken process "
                     "to obtain the access token.",
                 )
+            if "wireless-network" in rest:
+                return self.wireless(rest[1:], req)
             if req.method == "PUT":
                 return self.write(rest[1:], req, snap)
             if req.method != "GET":
@@ -245,6 +250,81 @@ class Omada(HttpService):
         if len(p) >= 2 and p[0] == "gateways":
             return err(-39701, "The gateway does not exist.")
         return err(-1600, "Unsupported request path.", 404)
+
+    def site_ssids(self) -> list[dict[str, Any]]:
+        if self.ssids is None:
+            self.ssids = []
+            for s in self.ctx.world.d.ssids.values():
+                if s.site != self.site:
+                    continue
+                self.ssid_ids += 1
+                self.ssids.append(
+                    {
+                        "ssidId": f"ssid{self.ssid_ids:04d}",
+                        "name": s.name,
+                        "band": 3,
+                        "guestNetEnable": s.guest,
+                        "security": 2 if s.security == "wpa2-enterprise" else 3,
+                        "broadcast": True,
+                        "vlanSetting": {"mode": 1, "customConfig": {"vlanId": s.vlan}},
+                        "pskSetting": {"versionPsk": 2, "encryptionPsk": 3},
+                        "ssidEnable": True,
+                    }
+                )
+        return self.ssids
+
+    def wireless(self, parts: list[str], req: Request) -> Response:
+        """Wireless network: the site's WLAN group and its SSIDs (list, create,
+        update-basic-config, enable, delete). The password is never shown back."""
+        if len(parts) < 3 or parts[0] != "sites" or parts[2] != "wireless-network":
+            return err(-1600, "Unsupported request path.", 404)
+        if parts[1] != self.site_id:
+            return err(-1005, "Operation forbidden.")
+        p = parts[3:]
+        rows = self.site_ssids()
+        try:
+            body = req.json() or {} if req.method in ("POST", "PATCH") else {}
+        except ValueError:
+            return err(-1001, "Invalid request parameters.")
+        if p == ["wlans"] and req.method == "GET":
+            return self.page(req, [{"wlanId": "wlan0001", "name": "Default", "primary": True}])
+        if p == ["wlans", "wlan0001", "ssids"]:
+            if req.method == "GET":
+                return self.page(req, [dict(r) for r in rows])
+            if req.method == "POST":
+                if (
+                    not body.get("name")
+                    or body.get("security") != 3
+                    or not (body.get("pskSetting") or {}).get("securityKey")
+                ):
+                    return err(-1001, "Invalid request parameters.")
+                self.ssid_ids += 1
+                made = {k: v for k, v in body.items() if k != "pskSetting"}
+                made.update({"ssidId": f"ssid{self.ssid_ids:04d}", "ssidEnable": True, "pskSetting": {"versionPsk": 2}})
+                rows.append(made)
+                return ok(None)
+        m = None
+        if len(p) >= 4 and p[:3] == ["wlans", "wlan0001", "ssids"]:
+            m = (p[3], p[4:])
+        elif len(p) >= 2 and p[0] == "ssids":
+            m = (p[1], p[2:])
+        if m is None:
+            return err(-1600, "Unsupported request path.", 404)
+        row = next((r for r in rows if r["ssidId"] == m[0]), None)
+        if row is None:
+            return err(-1001, "Invalid request parameters.")
+        if req.method == "DELETE" and not m[1]:
+            rows.remove(row)
+            return ok(None)
+        if req.method == "PATCH" and m[1] == ["update-basic-config"]:
+            row.update({k: v for k, v in body.items() if k != "pskSetting"})
+            return ok(None)
+        if req.method == "PATCH" and m[1] == ["enable"]:
+            row["ssidEnable"] = bool(body.get("ssidEnable"))
+            return ok(None)
+        if req.method == "GET" and not m[1]:
+            return ok(dict(row))
+        return err(-1, "Request method not supported.", 405)
 
     def write(self, parts: list[str], req: Request, snap: Snapshot) -> Response:
         """The one write emulated: Set port status for given port."""

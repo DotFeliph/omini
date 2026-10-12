@@ -174,9 +174,18 @@ tested with fixtures). The rules that are easy to break:
   everything below them, and nothing else; a device belongs to one area; an
   area may sit wholly inside another, never partly over it. Areas follow
   their members, can be hidden, recolored (any color) or folded.
-- **VLANs and subnets are a filter, not areas** (maintainer's decision after
-  comparing other tools): the picker highlights a network's devices and draws
-  a temporary frame around each group of them.
+- **Every VLAN and subnet is an area on the map** (maintainer's decision,
+  replacing "a filter, not areas" and a networks view of cards he turned
+  down): the networks are seen at once inside the topology. They are strict
+  like any area; a device in several networks (router, trunk switch, access
+  point with many VLANs) stays outside them all, a client's own address
+  decides its network before the VLAN of its link, and a device in an area
+  the user drew stays there. They are not stored, follow their devices and
+  can be turned off in the menu's VLANs tab. The filter still highlights one
+  network and zooms the map to it.
+- **Reset layout simplifies** (maintainer's rule): besides forgetting the
+  positions, it folds every node's clients from two of them up, until the
+  threshold is changed in Settings.
 - **Wi-Fi networks** are mini nodes between an access point and its clients
   (a click folds them).
 - **Export** to PNG, SVG, draw.io or JSON, always of the whole map expanded,
@@ -185,8 +194,14 @@ tested with fixtures). The rules that are easy to break:
 ## Screens and panels
 
 - **Screens:** Map (home), Alerts, Integrations, Settings; Flows only while
-  its integration is on. **The device list is a drawer on the map**, and the
+  its integration is on. VLANs and DNS & DHCP are tabs of the map's menu, not
+  screens (maintainer's rule). **The device list is a drawer on the map**, and the
   **plugin store a modal in Integrations** — not screens (maintainer's rules).
+- **The map's menu** (hamburger, top left) opens that drawer in three tabs:
+  Devices (with the offline and hidden switches), VLANs (the VLANs and
+  subnets: a click on one highlights it and zooms to it; the networks' areas
+  switch) and DNS & DHCP. No filters tab and no filters in the toolbar
+  (maintainer's rule); a dot on the menu says the map is filtered.
 - **The device panel** slides over the map: summary, health (CPU, memory,
   temperatures, disks, updates), a front view of the ports (click a port for
   its card), the device's extras (services, VPN peers, DHCP pools, firewall
@@ -296,9 +311,72 @@ access point and router alike.
   is.
 - **Phases**: first the catalog and the switches (Horaco, the maintainer's,
   tested for real; then MikroTik, UniFi, Omada, OpenWrt and SNMP), then the
-  router (OPNsense first): the VLAN's interface and subnet, its DHCP pool and
-  basic firewall rules (internet access; isolated from the other VLANs or
-  not, per VLAN).
+  router (below).
+
+### Phase 2: a VLAN is a whole network
+
+Omini should be an almost perfect interface to set up VLANs on switches and
+routers (maintainer's goal): creating one is a single short form, and Omini
+does the rest on every device.
+
+- **A VLAN in the catalog is a network**: id, name, color and, when the
+  network has a router Omini can change, its **gateway** (address and
+  prefix, e.g. 192.168.30.1/24, suggested from the id), its **DHCP** (on by
+  default, the range suggested as .100 to .250), its **access** and its
+  **discovery** (mDNS). Without such a router a VLAN is just a VLAN on the
+  switches, as in phase 1.
+- **Access**, one choice per VLAN (maintainer's choice, over "always
+  isolated" and free rules): **Internet only** (the default: internet, no
+  other network), **Whole network** (internet and every other network) and
+  **No internet** (its own network only, e.g. cameras). Omini writes the
+  firewall rules for it; finer rules stay in the router's own interface.
+- **The router does it all in one change** (`network.set`): the VLAN
+  interface on the router's port toward the switches, its assignment and
+  gateway address, the DHCP range (with the gateway as DNS) and the access
+  rules. It is applied, verified and saved like any change; `network.delete`
+  undoes all of it. OPNsense first, through its API: 26.7 or later (interface
+  assignments came to the API in 26.7); an older one gets a note to do it by
+  hand, as phase 1 does today.
+- **What exists is imported and can be changed** (maintainer's rule, over
+  "only what Omini created"): the router's networks (each VLAN's interface,
+  gateway, DHCP range and mDNS) come into the catalog the first time, and
+  any of them can be changed from Omini. The untagged LAN is VLAN 1's
+  network. Access is read from the network's rules: rules that match one of
+  the three choices show it; others show **Custom**, kept as they are until
+  a choice is picked, which replaces that network's rules (the form says
+  so). The WAN's VLANs (an operator's PPPoE VLAN) are not the network's: they
+  are never imported nor shown.
+- **The network Omini is in is protected**: changing its gateway or prefix,
+  giving it No internet or deleting it is destructive (blocked by default,
+  asked twice when allowed).
+- **Switches on demand** (maintainer's choice, over carrying every VLAN on
+  every uplink at once): creating a VLAN changes the router only; a switch
+  gets the VLAN, and the way to the router its tag, when one of its ports is
+  put in it (phase 1's plan).
+- **Ports from the VLAN** (maintainer's choice): opening a VLAN shows the
+  front of every switch that can change VLANs; a click on a port goes out →
+  in the VLAN (access) → tagged (trunk) → out, with the plan shown before
+  applying. The port's card keeps its "Change VLAN".
+- **Also in this phase** (maintainer's choice): **IP reservations** (a fixed
+  address for a device, from its panel: `reservation.set`/`reservation.delete`
+  on the router), **moving a device to a VLAN** (its panel: the port it is on
+  changes, with the plan), **discovery between VLANs** (the router's mDNS
+  repeater for the VLANs that ask for it; OPNsense needs its os-mdns-repeater
+  plugin) and **Wi-Fi per VLAN** (a network name per VLAN on the access points
+  that can: UniFi, Omada, OpenWrt; Mercusys cannot).
+- **VMs and containers in VLANs**: a guest's virtual NIC is a port whose
+  VLANs (Proxmox's tag and trunks) Omini changes like a switch port's; the
+  hypervisor's bridge must be VLAN aware (set by hand: Omini never changes a
+  host's network), and the plan goes on through it to the switch port the
+  host is on. A device Omini cannot change on the way (a hypervisor, a dumb
+  switch) is a note, not the end of the plan.
+- **Deleting a VLAN** removes it from the router and the switches; with
+  devices still in it, the confirmation says how many lose their network. It
+  is not destructive in Omini's sense (Omini and the internet stay up).
+- **Order**: the network in the catalog and OPNsense's `network.set` (with
+  the devnet's OPNsense taking writes), the VLAN's port panel, reservations
+  and moving a device, mDNS, then Wi-Fi per VLAN; the other switch plugins'
+  `port.vlans` in between as they come.
 
 ## DNS and DHCP
 

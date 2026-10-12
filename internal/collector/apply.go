@@ -88,8 +88,13 @@ func (c *Collector) Apply(ctx context.Context, req ChangeRequest) (store.ConfigC
 	}
 	req.Value = value
 	// Disabling a protected port, or changing its VLANs (other than adding a
-	// tagged one), is destructive.
-	if p, guarded := n.Protected[req.Port]; guarded && destructive(req, before) {
+	// tagged one), is destructive; so is cutting the network Omini is in.
+	p, guarded := n.Protected[req.Port]
+	guarded = guarded && destructive(req, before)
+	if req.Kind == model.ChangeKindNetworkSet || req.Kind == model.ChangeKindNetworkDelete {
+		p, guarded = networkGuard(n, req, c.opts.Self)
+	}
+	if guarded {
 		if allowed := c.AllowDestructive(ctx); !allowed || !req.Confirmed {
 			return store.ConfigChange{}, &DestructiveError{Protection: p, Allowed: allowed}
 		}
@@ -105,7 +110,7 @@ func (c *Collector) Apply(ctx context.Context, req ChangeRequest) (store.ConfigC
 	}
 	devices, applyErr := c.applyWith(ctx, in, change)
 
-	after, _ := json.Marshal(req.Value)
+	after, _ := json.Marshal(redacted(req.Value))
 	rec := store.ConfigChange{
 		NodeID: n.ID, IntegrationID: n.IntegrationID, Kind: string(req.Kind), Port: req.Port,
 		Before: before, After: after, At: c.opts.Now(),
@@ -114,7 +119,7 @@ func (c *Collector) Apply(ctx context.Context, req ChangeRequest) (store.ConfigC
 		rec.Error = applyErr.Error()
 		slog.Warn("configuration change failed", "node", n.ID, "kind", req.Kind, "port", req.Port, "err", applyErr)
 	} else {
-		slog.Info("configuration changed", "node", n.ID, "kind", req.Kind, "port", req.Port, "value", req.Value)
+		slog.Info("configuration changed", "node", n.ID, "kind", req.Kind, "port", req.Port, "value", string(after))
 	}
 	if rec.ID, err = c.store.AddConfigChange(ctx, rec); err != nil {
 		return rec, err
@@ -145,6 +150,18 @@ func checkChange(n topology.Node, req ChangeRequest) (json.RawMessage, any, erro
 		return vlanSet(n, req.Value)
 	case model.ChangeKindVlanDelete:
 		return vlanDelete(n, req.Value)
+	case model.ChangeKindNetworkSet:
+		return networkSet(n, req.Value)
+	case model.ChangeKindNetworkDelete:
+		return networkDelete(n, req.Value)
+	case model.ChangeKindReservationSet:
+		return reservationSet(n, req.Value)
+	case model.ChangeKindReservationDelete:
+		return reservationDelete(n, req.Value)
+	case model.ChangeKindWifiSet:
+		return wifiSet(n, req.Value)
+	case model.ChangeKindWifiDelete:
+		return wifiDelete(n, req.Value)
 	}
 	i := slices.IndexFunc(n.Device.Interfaces, func(i model.Interface) bool { return i.Name == req.Port })
 	if i < 0 {
@@ -188,8 +205,9 @@ func portVlans(d *model.Device, value any) (model.PortVlans, error) {
 	if err != nil {
 		return v, fmt.Errorf("%w: port.vlans takes {untagged, tagged}", ErrInvalidChange)
 	}
+	// A device that keeps no list of VLANs (a VM's virtual NIC) takes any tag.
 	has := func(id uint16) bool {
-		return slices.ContainsFunc(d.Vlans, func(x model.Vlan) bool { return x.ID == id })
+		return len(d.Vlans) == 0 || slices.ContainsFunc(d.Vlans, func(x model.Vlan) bool { return x.ID == id })
 	}
 	if v.Untagged == nil && len(v.Tagged) == 0 {
 		return v, fmt.Errorf("%w: a port needs at least one VLAN", ErrInvalidChange)
@@ -448,6 +466,11 @@ func offers(d *model.Device, k model.ChangeKind) bool {
 		return slices.ContainsFunc(d.Interfaces, func(i model.Interface) bool { return i.Vlans != nil })
 	case model.ChangeKindVlanSet, model.ChangeKindVlanDelete:
 		return len(d.Vlans) > 0
+	case model.ChangeKindNetworkSet, model.ChangeKindNetworkDelete,
+		model.ChangeKindReservationSet, model.ChangeKindReservationDelete:
+		return len(d.Networks) > 0
+	case model.ChangeKindWifiSet, model.ChangeKindWifiDelete:
+		return len(d.WifiNetworks) > 0
 	}
 	return false
 }

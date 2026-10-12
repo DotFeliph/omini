@@ -4,13 +4,13 @@ import {
   ArrowRightFromLine,
   Bell,
   Download,
-  Eye,
-  EyeOff,
   LayoutGrid,
-  List,
+  Menu,
   RefreshCw,
   SquareDashed,
+  X,
 } from 'lucide-vue-next'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import type { NetworkGroup } from '@/lib/networks'
@@ -18,27 +18,29 @@ import { formatAgo } from '@/lib/format'
 import { prefs } from '@/lib/prefs'
 
 /**
- * The map's toolbar: what is on the map (devices, alerts, failing
- * integrations, last update) on the left, the map's controls on the right.
+ * The map's toolbar: the menu (devices and filters), alerts, failing
+ * integrations and last update on the left, the map's controls on the right.
  */
-defineProps<{
-  summary: { devices: number; clients: number; problems: number }
+const props = defineProps<{
+  summary: { problems: number }
   /** Open critical and warning alerts not dismissed. */
   attention: number
   generatedAt?: string
   now: number
-  offlineCount: number
   networkGroups: NetworkGroup[]
-  hiddenCount: number
   exporting: boolean
   refreshing: boolean
 }>()
 const emit = defineEmits<{ export: []; resetLayout: []; refresh: [] }>()
 const devicesOpen = defineModel<boolean>('devicesOpen', { required: true })
 const netFilter = defineModel<string | undefined>('netFilter')
-const showHidden = defineModel<boolean>('showHidden', { required: true })
 const drawing = defineModel<boolean>('drawing', { required: true })
 const { t, locale } = useI18n()
+
+/** The network the map highlights, shown next to the menu to clear it. */
+const network = computed(() => props.networkGroups.find((g) => g.key === netFilter.value))
+/** Something is left out of the map: the menu shows a dot. */
+const filtered = computed(() => !!network.value || prefs.hideOffline)
 
 function toggleDirection() {
   prefs.layoutDirection = prefs.layoutDirection === 'RIGHT' ? 'DOWN' : 'RIGHT'
@@ -50,16 +52,28 @@ function toggleDirection() {
     <div class="chips">
       <button
         type="button"
-        class="chip chip-button"
+        class="btn small icon menu"
         :class="{ active: devicesOpen }"
-        data-test="devices-chip"
+        data-test="map-menu"
         :aria-expanded="devicesOpen"
-        :title="t('devices.open')"
+        :aria-label="t('mapMenu.open')"
+        :title="t('mapMenu.open')"
         @click="devicesOpen = !devicesOpen"
       >
-        <List :size="12" />
-        {{ t('map.devices', summary.devices) }} · {{ t('map.clients', summary.clients) }}
+        <Menu :size="16" />
+        <span v-if="filtered" class="dot" data-test="filtered" />
       </button>
+      <span v-if="network" class="chip net" data-test="net-chip">
+        {{ network.name }}
+        <button
+          type="button"
+          class="clear"
+          :aria-label="t('mapMenu.clearNetwork')"
+          @click="netFilter = undefined"
+        >
+          <X :size="12" />
+        </button>
+      </span>
       <RouterLink v-if="attention" to="/alerts" class="chip problem" data-test="alerts-chip">
         <Bell :size="12" />
         {{ t('map.alerts', { n: attention }, attention) }}
@@ -72,44 +86,6 @@ function toggleDirection() {
       </span>
     </div>
     <div class="buttons">
-      <button
-        class="btn small"
-        :class="{ active: prefs.hideOffline }"
-        data-test="toggle-offline"
-        :aria-pressed="prefs.hideOffline"
-        :title="prefs.hideOffline ? t('map.showOffline') : t('map.hideOffline')"
-        @click="prefs.hideOffline = !prefs.hideOffline"
-      >
-        <component :is="prefs.hideOffline ? Eye : EyeOff" :size="15" />
-        <span class="label">
-          {{ prefs.hideOffline ? t('map.showOffline') : t('map.hideOffline') }}
-          <template v-if="offlineCount"> ({{ offlineCount }})</template>
-        </span>
-      </button>
-      <select
-        v-if="networkGroups.length"
-        v-model="netFilter"
-        class="select small net-pick"
-        data-test="net-filter"
-        :class="{ active: netFilter }"
-        :aria-label="t('map.netFilter')"
-      >
-        <option :value="undefined">{{ t('map.allNetworks') }}</option>
-        <option v-for="g in networkGroups" :key="g.key" :value="g.key">{{ g.name }}</option>
-      </select>
-      <button
-        v-if="hiddenCount"
-        class="btn small"
-        :class="{ active: showHidden }"
-        data-test="toggle-hidden"
-        :aria-pressed="showHidden"
-        @click="showHidden = !showHidden"
-      >
-        <component :is="showHidden ? EyeOff : Eye" :size="15" />
-        <span class="label">
-          {{ showHidden ? t('map.hideHidden') : t('map.showHidden') }} ({{ hiddenCount }})
-        </span>
-      </button>
       <button
         class="btn small"
         :title="prefs.layoutDirection === 'RIGHT' ? t('map.topDown') : t('map.leftToRight')"
@@ -188,15 +164,32 @@ function toggleDirection() {
   text-decoration: none;
   color: var(--text);
 }
-.chip-button {
-  cursor: pointer;
-  font: inherit;
-  font-size: inherit;
+.menu {
+  position: relative;
 }
-.chip-button:hover,
-.chip-button.active {
+.dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.chip.net {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border-color: var(--accent);
   color: var(--accent);
+}
+.clear {
+  display: inline-flex;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
 }
 .chip.problem {
   background: var(--danger-soft);
@@ -219,15 +212,6 @@ function toggleDirection() {
   to {
     transform: rotate(360deg);
   }
-}
-.net-pick {
-  width: auto;
-  max-width: 260px;
-  pointer-events: auto;
-}
-.net-pick.active {
-  border-color: var(--accent);
-  color: var(--accent);
 }
 
 @media (max-width: 640px) {

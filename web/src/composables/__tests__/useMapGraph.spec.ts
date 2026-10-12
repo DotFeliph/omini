@@ -13,6 +13,7 @@ beforeEach(() => {
   prefs.collapsedAreas = []
   prefs.hideOffline = false
   prefs.collapseThreshold = 8
+  prefs.foldAll = false
 })
 
 describe('useMapGraph', () => {
@@ -54,5 +55,15 @@ describe('useMapGraph', () => {
     expect(g.direction.value).toBe('DOWN')
     g.exportDirection.value = undefined
     expect(g.direction.value).toBe('RIGHT')
+  })
+
+  it('folds every group of two or more clients after "Reset layout"', () => {
+    const g = useMapGraph(shallowRef<TopologyResponse>(star('dev:ap', 2)), ref([]))
+    expect(g.view.value.groups).toHaveLength(0) // under the threshold
+    prefs.foldAll = true
+    expect(g.view.value.groups).toHaveLength(1)
+    // A group the user opens stays open.
+    prefs.expanded = ['dev:ap']
+    expect(g.view.value.groups).toHaveLength(0)
   })
 })

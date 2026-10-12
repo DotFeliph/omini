@@ -21,8 +21,11 @@ const VlansImportedSetting = "vlans_imported"
 // the VLANs the devices have.
 func (c *Collector) Vlans(ctx context.Context) ([]store.Vlan, error) {
 	list, err := c.store.Vlans(ctx)
-	if err != nil || len(list) > 0 {
+	if err != nil {
 		return list, err
+	}
+	if len(list) > 0 {
+		return c.adoptNetworks(ctx, list)
 	}
 	if _, done, err := c.store.GetSetting(ctx, VlansImportedSetting); err != nil || done {
 		return list, err
@@ -32,14 +35,37 @@ func (c *Collector) Vlans(ctx context.Context) ([]store.Vlan, error) {
 		return list, nil // nothing to import yet: try again once devices report VLANs
 	}
 	for _, e := range found {
-		if _, err := c.store.SaveVlan(ctx, store.Vlan{ID: e.ID, Name: e.Name, Subnet: e.Subnet}); err != nil {
-			return nil, err
+		v := store.Vlan{ID: e.ID, Name: e.Name, Subnet: e.Subnet, Network: e.Network}
+		if _, err := c.store.SaveVlan(ctx, v); err != nil {
+			v.Network = nil // a network the catalog cannot hold (a public range): the VLAN alone
+			if _, err := c.store.SaveVlan(ctx, v); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if err := c.store.SetSetting(ctx, VlansImportedSetting, "1"); err != nil {
 		return nil, err
 	}
 	return c.store.Vlans(ctx)
+}
+
+// adoptNetworks brings in the networks a router serves for catalog VLANs that
+// have none yet (a router added, or its plugin updated, after the import).
+func (c *Collector) adoptNetworks(ctx context.Context, list []store.Vlan) ([]store.Vlan, error) {
+	nets := vlans.Networks(c.State().Topology)
+	for i, v := range list {
+		nw, ok := nets[v.ID]
+		if v.Network != nil || !ok {
+			continue
+		}
+		v.Network = &nw
+		saved, err := c.store.SaveVlan(ctx, v)
+		if err != nil {
+			continue // a network the catalog cannot hold: the VLAN stays as it is
+		}
+		list[i] = saved
+	}
+	return list, nil
 }
 
 // PlanStep is a step of a VLAN plan, with its protection when destructive.
@@ -62,7 +88,7 @@ func (c *Collector) PlanVlans(ctx context.Context, nodeID, port string, want mod
 	}
 	entries := make([]vlans.Entry, len(catalog))
 	for i, v := range catalog {
-		entries[i] = vlans.Entry{ID: v.ID, Name: v.Name, Subnet: v.Subnet}
+		entries[i] = vlans.Entry{ID: v.ID, Name: v.Name, Subnet: v.Subnet, Network: v.Network}
 	}
 	topo := c.State().Topology
 	steps, notes, err := vlans.Plan(topo, entries, nodeID, port, want)
@@ -130,14 +156,33 @@ func (c *Collector) ApplyVlans(ctx context.Context, nodeID, port string, want mo
 	return done, nil
 }
 
-// SaveVlan creates or changes a VLAN of the catalog; a new name is applied to
-// every device that has the VLAN and can rename it.
-func (c *Collector) SaveVlan(ctx context.Context, v store.Vlan) (store.Vlan, []store.ConfigChange, error) {
+// SaveVlan creates or changes a VLAN of the catalog. Its network goes to the
+// router first (a router that refuses leaves the catalog as it was); then a
+// new name is applied to every device that has the VLAN and can rename it.
+// confirmed: a destructive router change (the network Omini is in) was
+// confirmed a second time.
+func (c *Collector) SaveVlan(ctx context.Context, v store.Vlan, confirmed bool) (store.Vlan, []store.ConfigChange, error) {
+	var done []store.ConfigChange
+	if v.Network != nil {
+		v.Network.Vlan = v.ID
+		if _, err := store.CheckNetwork(*v.Network); err != nil {
+			return v, nil, err
+		}
+		if req, ok := networkStep(c.State().Topology, v); ok {
+			req.Confirmed = confirmed
+			rec, err := c.Apply(ctx, req)
+			if rec.ID != 0 {
+				done = append(done, rec)
+			}
+			if err != nil {
+				return v, done, err
+			}
+		}
+	}
 	saved, err := c.store.SaveVlan(ctx, v)
 	if err != nil {
-		return saved, nil, err
+		return saved, done, err
 	}
-	var done []store.ConfigChange
 	for _, n := range c.State().Topology.Nodes {
 		i := vlanIndex(n, v.ID)
 		if i < 0 || model.Deref(n.Device.Vlans[i].Name) == saved.Name || !slices.Contains(n.Changes, model.ChangeKindVlanSet) {
@@ -160,8 +205,24 @@ var ErrVlanOnDevices = errors.New("the VLAN is still on devices")
 // DeleteVlan deletes a VLAN from every device that has it, then from the
 // catalog. A device that cannot delete it, or a port that still uses it,
 // stops it.
-func (c *Collector) DeleteVlan(ctx context.Context, id uint16) ([]store.ConfigChange, error) {
+func (c *Collector) DeleteVlan(ctx context.Context, id uint16, confirmed bool) ([]store.ConfigChange, error) {
 	var done []store.ConfigChange
+	// The router's network first: what hangs on the VLAN loses its gateway.
+	for _, n := range c.State().Topology.Nodes {
+		if networkOf(n, id) == nil {
+			continue
+		}
+		if !slices.Contains(n.Changes, model.ChangeKindNetworkDelete) {
+			return done, fmt.Errorf("%w: %s cannot remove its network from Omini: remove it there", ErrVlanOnDevices, n.Label)
+		}
+		rec, err := c.Apply(ctx, ChangeRequest{NodeID: n.ID, Kind: model.ChangeKindNetworkDelete, Value: NetworkDelete{Vlan: id}, Confirmed: confirmed})
+		if rec.ID != 0 {
+			done = append(done, rec)
+		}
+		if err != nil {
+			return done, err
+		}
+	}
 	for _, n := range c.State().Topology.Nodes {
 		if vlanIndex(n, id) < 0 {
 			continue

@@ -32,6 +32,7 @@ func (*switchy) Info() integration.Info {
 		Type: "switchy", Name: "Switchy", Kind: integration.KindCore,
 		Changes: []model.ChangeKind{
 			model.ChangeKindPortEnabled, model.ChangeKindPortVlans, model.ChangeKindVlanSet, model.ChangeKindVlanDelete,
+			model.ChangeKindNetworkSet, model.ChangeKindNetworkDelete, model.ChangeKindReservationSet, model.ChangeKindReservationDelete,
 		},
 	}
 }
@@ -54,6 +55,37 @@ func (s *switchy) Apply(_ context.Context, _ integration.Config, c model.Change)
 	s.applied = append(s.applied, c)
 	if s.err != nil {
 		return nil, s.err
+	}
+	if c.Kind == model.ChangeKindReservationSet || c.Kind == model.ChangeKindReservationDelete {
+		fw := s.devices[0]
+		var mac model.MACAddress
+		if r, ok := c.Value.(model.DhcpReservation); ok {
+			mac = r.MAC
+		} else {
+			mac = c.Value.(collector.ReservationDelete).MAC
+		}
+		fw.DhcpReservations = slices.DeleteFunc(slices.Clone(fw.DhcpReservations), func(x model.DhcpReservation) bool { return x.MAC == mac })
+		if r, ok := c.Value.(model.DhcpReservation); ok {
+			fw.DhcpReservations = append(fw.DhcpReservations, r)
+		}
+		s.devices[0] = fw
+		return []model.Device{fw}, nil
+	}
+	if c.Kind == model.ChangeKindNetworkSet || c.Kind == model.ChangeKindNetworkDelete {
+		fw := s.devices[0]
+		fw.Networks = slices.Clone(fw.Networks)
+		var id uint16
+		if nw, ok := c.Value.(model.Network); ok {
+			id = nw.Vlan
+		} else {
+			id = c.Value.(collector.NetworkDelete).Vlan
+		}
+		fw.Networks = slices.DeleteFunc(fw.Networks, func(x model.Network) bool { return x.Vlan == id })
+		if nw, ok := c.Value.(model.Network); ok {
+			fw.Networks = append(fw.Networks, nw)
+		}
+		s.devices[0] = fw
+		return []model.Device{fw}, nil
 	}
 	sw := s.devices[1]
 	sw.Interfaces, sw.Vlans = slices.Clone(sw.Interfaces), slices.Clone(sw.Vlans)
@@ -109,7 +141,7 @@ func switchNetwork(t *testing.T) (*collector.Collector, *switchy, *store.Store) 
 			now = now.Add(time.Second)
 			return now
 		},
-		Self: collector.Self{MACs: []model.MACAddress{ominiMAC}},
+		Self: collector.Self{MACs: []model.MACAddress{ominiMAC}, IPs: []string{"192.168.1.3"}},
 	})
 	if _, err := st.CreateIntegration(ctx, store.Integration{Name: "sw", Type: "switchy", Enabled: true, Config: integration.Config{}}); err != nil {
 		t.Fatal(err)
@@ -124,6 +156,11 @@ func switchNetwork(t *testing.T) (*collector.Collector, *switchy, *store.Store) 
 		{
 			Key: string(fwMAC), Name: "fw", Role: model.Ptr(model.DeviceRoleFirewall), MACs: []model.MACAddress{fwMAC},
 			Arp: []model.ArpEntry{{IP: "192.168.1.2", MAC: swMAC}, {IP: "192.168.1.41", MAC: phoneMAC}},
+			Networks: []model.Network{{
+				Vlan: 1, Name: model.Ptr("LAN"), Gateway: model.Ptr("192.168.1.1/24"),
+				Dhcp:   &model.NetworkDhcp{Enabled: true, From: model.Ptr("192.168.1.100"), To: model.Ptr("192.168.1.250")},
+				Access: model.Ptr(model.NetworkAccessAll),
+			}},
 		},
 		{
 			Key: string(swMAC), Name: "sw", Role: model.Ptr(model.DeviceRoleSwitch), MACs: []model.MACAddress{swMAC},
@@ -359,10 +396,11 @@ func TestProtectionFollowsOminiAndTheInternet(t *testing.T) {
 }
 
 // A device whose ports report no state (the firewall here) offers no port
-// change; on the switch, a port that reports none cannot be changed either.
+// change, only what it reports (its networks); on the switch, a port that
+// reports none cannot be changed either.
 func TestPortChangesNeedThePortState(t *testing.T) {
 	coll, s, _ := switchNetwork(t)
-	if fw, _ := node(coll.State(), "dev:"+string(fwMAC)); len(fw.Changes) != 0 {
+	if fw, _ := node(coll.State(), "dev:"+string(fwMAC)); !slices.Equal(fw.Changes, []model.ChangeKind{model.ChangeKindNetworkSet, model.ChangeKindNetworkDelete, model.ChangeKindReservationSet, model.ChangeKindReservationDelete}) {
 		t.Fatalf("firewall: %v", fw.Changes)
 	}
 	s.mu.Lock()

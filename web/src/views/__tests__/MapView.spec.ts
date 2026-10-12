@@ -18,6 +18,8 @@ vi.mock('@/lib/api', async (orig) => {
       topology: vi.fn<typeof mod.api.topology>(),
       createArea: vi.fn<typeof mod.api.createArea>(),
       integrations: vi.fn<typeof mod.api.integrations>(),
+      inventory: vi.fn<typeof mod.api.inventory>().mockResolvedValue([]),
+      vlans: vi.fn<typeof mod.api.vlans>().mockResolvedValue([]),
     },
   }
 })
@@ -81,11 +83,15 @@ describe('MapView', () => {
     await flushPromises()
     expect(w.find('.map').exists()).toBe(true)
     expect(w.find('.toolbar').exists()).toBe(true)
-    expect(w.text()).toContain('1 device')
+    // The counts are in the menu's Devices tab.
+    await w.get('[data-test=map-menu]').trigger('click')
+    await flushPromises()
+    expect(w.get('[data-test=devices-drawer]').text()).toContain('1 device')
     w.unmount()
   })
 
-  it('offers the subnets as a filter, not as areas', async () => {
+  it('draws each subnet as an area (not stored) and offers it as a filter', async () => {
+    prefs.networkAreas = true
     vi.mocked(api.integrations).mockResolvedValue([])
     vi.mocked(api.createArea).mockImplementation(async (a) => ({
       ...a,
@@ -127,14 +133,32 @@ describe('MapView', () => {
     })
     const w = mount(MapView, { global: { plugins: [...plugins(), router] } })
     await flushPromises()
-    // No area is made: the subnets are a filter in the toolbar.
+    // No area is stored: the networks' areas are drawn, and listed in the VLANs tab.
     expect(api.createArea).not.toHaveBeenCalled()
-    const pick = w.get('[data-test=net-filter]')
-    expect(pick.findAll('option').map((o) => o.text())).toEqual([
-      'All networks',
-      'LAB · 10.0.5.0/24',
-      'LAN · 192.168.1.0/24',
-    ])
+    const areaNames = () => w.findAll('.area.auto .area-title').map((a) => a.text())
+    expect(areaNames().sort()).toEqual(['LAB · 10.0.5.0/24', 'LAN · 192.168.1.0/24'])
+
+    await w.get('[data-test=map-menu]').trigger('click')
+    await w.get('[data-test=menu-tab-vlans]').trigger('click')
+    await flushPromises()
+    const subnets = w.get('[data-test=subnets]')
+    expect(subnets.findAll('strong').map((o) => o.text())).toEqual(['LAB', 'LAN'])
+    // Picking one highlights it (the menu steps aside), shown next to the menu with a dot; the chip clears it.
+    expect(w.find('[data-test=filtered]').exists()).toBe(false)
+    await subnets.get('[data-net="subnet:10.0.5.0/24"]').trigger('click')
+    expect(w.find('[data-test=devices-drawer]').exists()).toBe(false)
+    expect(w.get('[data-test=net-chip]').text()).toContain('LAB · 10.0.5.0/24')
+    expect(w.find('[data-test=filtered]').exists()).toBe(true)
+    await w.get('[data-test=net-chip] button').trigger('click')
+    expect(w.find('[data-test=net-chip]').exists()).toBe(false)
+
+    // The VLANs tab can turn the networks' areas off.
+    await w.get('[data-test=map-menu]').trigger('click')
+    await flushPromises()
+    await w.get('[data-test=toggle-network-areas]').trigger('click')
+    await flushPromises()
+    expect(areaNames()).toEqual([])
+    prefs.networkAreas = true
     w.unmount()
   })
 

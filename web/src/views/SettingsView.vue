@@ -195,6 +195,7 @@ onMounted(async () => {
                 type="number"
                 min="2"
                 max="100"
+                @input="prefs.foldAll = false"
               />
             </div>
           </div>

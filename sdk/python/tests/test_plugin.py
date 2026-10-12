@@ -25,6 +25,9 @@ def plugin():
             raise KeyError("oops")
         if cfg.str("host") == "dict":
             return [{"key": "fw", "name": "fw", "role": "firewall"}]
+        if cfg.str("host") == "network":
+            dhcp = {"enabled": True, "from": "10.0.30.100", "to": "10.0.30.200"}
+            return [{"key": "fw", "name": "fw", "networks": [{"vlan": 30, "dhcp": dhcp}]}]
         if cfg.str("host") == "invalid":
             return [{"key": "fw", "name": "fw", "macs": ["AA-BB"]}]
         return [
@@ -62,6 +65,17 @@ def test_dicts_are_validated(plugin):
     assert code == 0 and resp["devices"][0]["role"] == "firewall"
     resp, code = plugin.handle(request(config={"host": "invalid"}))
     assert code == 1 and resp["error"].startswith("the plugin returned invalid data")
+
+
+def test_fields_keep_their_schema_names(plugin):
+    # "from" is a Python keyword: the model calls it from_, the JSON from.
+    resp, code = plugin.handle(request(config={"host": "network"}))
+    assert code == 0
+    assert resp["devices"][0]["networks"][0]["dhcp"] == {
+        "enabled": True,
+        "from": "10.0.30.100",
+        "to": "10.0.30.200",
+    }
 
 
 def test_test_action(plugin):

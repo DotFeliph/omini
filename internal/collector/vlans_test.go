@@ -71,7 +71,7 @@ func TestRenameAndDeleteVLANs(t *testing.T) {
 	if _, err := coll.Vlans(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, done, err := coll.SaveVlan(ctx, store.Vlan{ID: 20, Name: "Visitors"}); err != nil || len(done) != 1 {
+	if _, done, err := coll.SaveVlan(ctx, store.Vlan{ID: 20, Name: "Visitors"}, false); err != nil || len(done) != 1 {
 		t.Fatalf("rename: %+v %v", done, err)
 	}
 	if v := s.applied[0].Value.(collector.VlanValue); v.Name != "Visitors" {
@@ -81,7 +81,7 @@ func TestRenameAndDeleteVLANs(t *testing.T) {
 	if _, err := coll.ApplyVlans(ctx, swID, "Port 2", model.PortVlans{Untagged: model.Ptr[uint16](20)}, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := coll.DeleteVlan(ctx, 20); !errors.Is(err, collector.ErrInvalidChange) {
+	if _, err := coll.DeleteVlan(ctx, 20, false); !errors.Is(err, collector.ErrInvalidChange) {
 		t.Fatalf("in use: %v", err)
 	}
 	if _, err := coll.ApplyVlans(ctx, swID, "Port 2", model.PortVlans{Untagged: model.Ptr[uint16](1)}, false); err != nil {
@@ -100,13 +100,13 @@ func TestRenameAndDeleteVLANs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := coll.DeleteVlan(ctx, 20); err != nil {
+	if _, err := coll.DeleteVlan(ctx, 20, false); err != nil {
 		t.Fatal(err)
 	}
 	if list, _ := st.Vlans(ctx); slices.ContainsFunc(list, func(v store.Vlan) bool { return v.ID == 20 }) {
 		t.Fatalf("still in the catalog: %+v", list)
 	}
-	if _, err := coll.DeleteVlan(ctx, 1); !errors.Is(err, collector.ErrInvalidChange) {
+	if _, err := coll.DeleteVlan(ctx, 1, false); !errors.Is(err, collector.ErrInvalidChange) {
 		t.Fatalf("VLAN 1: %v", err)
 	}
 }

@@ -16,24 +16,35 @@ type Entry struct {
 	ID     uint16
 	Name   string
 	Subnet string
+	// Network is the VLAN's network on the router, when one serves it.
+	Network *model.Network
 }
 
 // Import builds the catalog from the VLANs the devices have: the first name
-// and subnet reported for each id.
+// and subnet reported for each id, and the network a router serves on it.
+// The WAN's VLANs (an operator's PPPoE VLAN) are not the network's: left out.
 func Import(topo topology.Topology) []Entry {
 	byID := map[uint16]*Entry{}
 	var ids []uint16
+	wan := WanVlans(topo)
+	entry := func(id uint16) *Entry {
+		e := byID[id]
+		if e == nil {
+			e = &Entry{ID: id}
+			byID[id] = e
+			ids = append(ids, id)
+		}
+		return e
+	}
 	for _, n := range topo.Nodes {
 		if n.Kind != topology.KindDevice || n.Device == nil {
 			continue
 		}
 		for _, v := range n.Device.Vlans {
-			e := byID[v.ID]
-			if e == nil {
-				e = &Entry{ID: v.ID}
-				byID[v.ID] = e
-				ids = append(ids, v.ID)
+			if wan[v.ID] {
+				continue
 			}
+			e := entry(v.ID)
 			if e.Name == "" {
 				e.Name = model.Deref(v.Name)
 			}
@@ -41,11 +52,71 @@ func Import(topo topology.Topology) []Entry {
 				e.Subnet = model.Deref(v.Subnet)
 			}
 		}
+		for _, nw := range n.Device.Networks {
+			if wan[nw.Vlan] {
+				continue
+			}
+			e := entry(nw.Vlan)
+			if e.Network == nil {
+				e.Network = &nw
+			}
+			if e.Name == "" && nw.Vlan != 1 {
+				e.Name = model.Deref(nw.Name)
+			}
+		}
 	}
 	slices.Sort(ids)
 	out := make([]Entry, 0, len(ids))
 	for _, id := range ids {
 		out = append(out, *byID[id])
+	}
+	return out
+}
+
+// WanVlans are the VLANs a WAN rides on (an operator's PPPoE or IPTV VLAN):
+// a VLAN interface that is a WAN, or that a WAN interface sits on.
+func WanVlans(topo topology.Topology) map[uint16]bool {
+	out := map[uint16]bool{}
+	for _, n := range topo.Nodes {
+		if n.Device == nil {
+			continue
+		}
+		wanOn := map[string]bool{}
+		for _, i := range n.Device.Interfaces {
+			if model.Deref(i.Wan) {
+				wanOn[i.Name] = true
+				if p := model.Deref(i.Parent); p != "" {
+					wanOn[p] = true
+				}
+			}
+		}
+		for _, i := range n.Device.Interfaces {
+			if v := model.Deref(i.Vlan); v != 0 && wanOn[i.Name] {
+				out[v] = true
+			}
+		}
+		for _, v := range n.Device.Vlans {
+			if wanOn[model.Deref(v.Interface)] {
+				out[v.ID] = true
+			}
+		}
+	}
+	return out
+}
+
+// Networks are the networks the routers serve, by VLAN (the first router's).
+func Networks(topo topology.Topology) map[uint16]model.Network {
+	out := map[uint16]model.Network{}
+	wan := WanVlans(topo)
+	for _, n := range topo.Nodes {
+		if n.Kind != topology.KindDevice || n.Device == nil {
+			continue
+		}
+		for _, nw := range n.Device.Networks {
+			if _, ok := out[nw.Vlan]; !ok && !wan[nw.Vlan] {
+				out[nw.Vlan] = nw
+			}
+		}
 	}
 	return out
 }
@@ -81,8 +152,10 @@ func Plan(topo topology.Topology, catalog []Entry, nodeID, port string, want mod
 		byID[topo.Nodes[i].ID] = &topo.Nodes[i]
 	}
 	names := map[uint16]string{}
+	entries := map[uint16]Entry{}
 	for _, e := range catalog {
 		names[e.ID] = e.Name
+		entries[e.ID] = e
 	}
 	need := slices.Clone(want.Tagged)
 	if want.Untagged != nil {
@@ -106,6 +179,10 @@ func Plan(topo topology.Topology, catalog []Entry, nodeID, port string, want mod
 	var steps []Step
 	var notes []Note
 	create := func(d *topology.Node) bool {
+		// A device that keeps no list of VLANs (a VM's virtual NIC) takes any tag.
+		if d.Device != nil && len(d.Device.Vlans) == 0 && !slices.Contains(d.Changes, model.ChangeKindVlanSet) {
+			return true
+		}
 		var missing []uint16
 		for _, id := range need {
 			if !hasVlan(d, id) {
@@ -144,6 +221,17 @@ func Plan(topo topology.Topology, catalog []Entry, nodeID, port string, want mod
 		return steps, notes, nil
 	}
 	steps = append(steps, Step{NodeID: n.ID, Kind: model.ChangeKindPortVlans, Port: port, Value: want})
+	// tagUp tags a device's port toward its parent: never the port just set (a
+	// VM's only NIC), nor on a device Omini cannot change (passed through).
+	tagUp := func(cur *topology.Node, up string) {
+		if cur.ID == n.ID && (up == port || up == "") && len(cur.Device.Vlans) == 0 {
+			return
+		}
+		if cur.Device == nil || !slices.Contains(cur.Changes, model.ChangeKindPortVlans) {
+			return
+		}
+		tag(cur, up)
+	}
 	for cur, seen := n, map[string]bool{n.ID: true}; ; {
 		edge := uplink(topo, cur.ID)
 		if edge == nil || seen[edge.Source] {
@@ -156,18 +244,35 @@ func Plan(topo topology.Topology, catalog []Entry, nodeID, port string, want mod
 		seen[parent.ID] = true
 		up := uplinkPort(cur, parent, edge.TargetPort)
 		if isRouter(parent) {
-			if missing := missingOn(parent, need); len(missing) > 0 {
+			// The router serves the VLAN's network: Omini creates it there
+			// when the catalog has one and the router can, else it is a note.
+			var missing []uint16
+			for _, id := range need {
+				if id == 1 || hasVlan(parent, id) || hasNetwork(parent, id) {
+					continue
+				}
+				e := entries[id]
+				if e.Network == nil || !slices.Contains(parent.Changes, model.ChangeKindNetworkSet) {
+					missing = append(missing, id)
+					continue
+				}
+				steps = append(steps, Step{NodeID: parent.ID, Kind: model.ChangeKindNetworkSet, Value: NetworkFor(e, edge.SourcePort)})
+			}
+			if len(missing) > 0 {
 				notes = append(notes, Note{NodeID: parent.ID, Reason: "router", Vlans: missing})
 			}
-			tag(cur, up)
+			tagUp(cur, up)
 			break
 		}
-		if parent.Kind != topology.KindDevice || parent.Device == nil || len(parent.Changes) == 0 {
+		if parent.Kind != topology.KindDevice || parent.Device == nil || !slices.Contains(parent.Changes, model.ChangeKindPortVlans) {
+			// Omini cannot change it (a hypervisor's bridge, a dumb switch): a
+			// note, and the way goes on above it.
 			notes = append(notes, Note{NodeID: parent.ID, Reason: "unmanaged", Vlans: need})
-			tag(cur, up)
-			break
+			tagUp(cur, up)
+			cur = parent
+			continue
 		}
-		tag(cur, up)
+		tagUp(cur, up)
 		if !create(parent) {
 			break
 		}
@@ -202,14 +307,26 @@ func hasVlan(n *topology.Node, id uint16) bool {
 	return n.Device != nil && slices.ContainsFunc(n.Device.Vlans, func(v model.Vlan) bool { return v.ID == id })
 }
 
-func missingOn(n *topology.Node, need []uint16) []uint16 {
-	var out []uint16
-	for _, id := range need {
-		if !hasVlan(n, id) {
-			out = append(out, id)
-		}
+func hasNetwork(n *topology.Node, id uint16) bool {
+	return n.Device != nil && slices.ContainsFunc(n.Device.Networks, func(x model.Network) bool { return x.Vlan == id })
+}
+
+// NetworkFor is the network.set value of a catalog VLAN: its network, named
+// after the VLAN, on the router's port toward the switches (parent) unless
+// it names its own.
+func NetworkFor(e Entry, parent string) model.Network {
+	n := model.Network{Vlan: e.ID}
+	if e.Network != nil {
+		n = *e.Network
+		n.Vlan = e.ID
 	}
-	return out
+	if model.Deref(n.Name) == "" && e.Name != "" {
+		n.Name = &e.Name
+	}
+	if model.Deref(n.Parent) == "" && parent != "" {
+		n.Parent = &parent
+	}
+	return n
 }
 
 func isRouter(n *topology.Node) bool {

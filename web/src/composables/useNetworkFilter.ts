@@ -41,5 +41,14 @@ export function useNetworkFilter(
     }))
   })
 
-  return { networkGroups, netFilter, inNet, netFrames }
+  /**
+   * Where to zoom for the picked network: the devices only in it (its areas),
+   * not the router and trunks that are in every network.
+   */
+  const focusIds = computed(() => {
+    const own = onlyIn.value.find((g) => g.key === netFilter.value)?.members
+    return own?.size ? own : inNet.value
+  })
+
+  return { networkGroups, netFilter, inNet, netFrames, focusIds }
 }

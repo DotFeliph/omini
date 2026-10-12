@@ -9,6 +9,7 @@ import (
 	"github.com/riccardoalv/omini/internal/integration"
 	"github.com/riccardoalv/omini/internal/store"
 	"github.com/riccardoalv/omini/internal/topology"
+	"github.com/riccardoalv/omini/internal/vlans"
 )
 
 // presenceSince is the setting holding when presence tracking started: devices
@@ -59,6 +60,12 @@ func (c *Collector) watch(ctx context.Context, topo topology.Topology, inventory
 		in.Vlans = map[uint16]string{}
 		for _, v := range list {
 			in.Vlans[v.ID] = v.Name
+		}
+		// The WAN's VLANs (an operator's) are not the network's: never unknown.
+		for id := range vlans.WanVlans(topo) {
+			if _, ok := in.Vlans[id]; !ok {
+				in.Vlans[id] = ""
+			}
 		}
 	}
 	if in.Configured["network"] {

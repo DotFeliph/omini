@@ -72,7 +72,7 @@ curl -b omini.cookie -X POST -H 'X-Omini-Request: 1' http://omini.lan:8080/api/r
 | `POST` | `/api/refresh` | Start a collection round as soon as possible (202) |
 | `POST` | `/api/collection/run` | Start a round now in which every integration skips its caches (deep scan, nmap scan): the Integrations screen's "Run a round now" (202) |
 | `PUT` | `/api/layout` | Body `{positions: {"<node id>": {x, y}}}`. Saves dragged positions; top-down positions use ids prefixed `DOWN:` |
-| `DELETE` | `/api/layout` | Forget every saved position ("Reset layout") |
+| `DELETE` | `/api/layout` | Forget every saved position ("Reset layout", which also folds the clients in the UI) |
 | `POST` | `/api/areas` | Create an area: `{name, color, direction, x, y, width, height, members}`. `color` is a preset (`gray`, `blue`, `green`, `yellow`, `red`, `purple`) or `#rrggbb`; `direction` is `RIGHT` or `DOWN` |
 | `PATCH` | `/api/areas/{id}` | Change any of `name`, `color`, `x`, `y`, `width`, `height`, `members`, `hidden` |
 | `DELETE` | `/api/areas/{id}` | Delete an area (its devices stay) |
@@ -104,10 +104,14 @@ the integration reported, in the [plugin data model](plugins.md#what-to-return).
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/vlans` | The network's VLANs (imported from the devices the first time): `[{id, name, color, subnet, devices: [{node_id, name, untagged, tagged}]}]` |
-| `POST` | `/api/vlans` | Body `{id, name, color, subnet}`: add a VLAN to the catalog (409 when it exists) |
-| `PATCH` | `/api/vlans/{id}` | Change `name`, `color` or `subnet`; a new name is applied to the devices that have the VLAN. Returns `{vlan, changes}` |
-| `DELETE` | `/api/vlans/{id}` | Delete it from every device, then from the catalog; 409 when a device cannot (it names it) |
+| `GET` | `/api/vlans` | The network's VLANs (imported from the devices the first time, with the networks the router serves): `[{id, name, color, subnet, network: {gateway, dhcp: {enabled, from, to}, access}, devices: [{node_id, name, untagged, tagged}]}]` |
+| `POST` | `/api/vlans` | Body `{id, name, color, subnet, network, confirm}`: add a VLAN to the catalog (409 when it exists); with a `network`, the router serves it first (`network.set`), and a destructive one answers 409 `destructive` until `confirm` |
+| `PATCH` | `/api/vlans/{id}` | Change `name`, `color`, `subnet` or `network` (`confirm` as above); the network goes to the router first, a new name to the devices that have the VLAN. Returns `{vlan, changes}` |
+| `PUT` | `/api/nodes/{id}/reservation` | Body `{ip}`: fix the device's address on the router whose network holds it (`reservation.set`) |
+| `DELETE` | `/api/nodes/{id}/reservation` | Free it (`reservation.delete`) |
+| `PUT` | `/api/wifi` | Body `{ssid, previous, vlan, password, enabled}`: create or change a Wi-Fi network on every controller and access point Omini manages (`wifi.set`); an empty password keeps the current one. The password is passed on, never kept nor logged |
+| `DELETE` | `/api/wifi/{ssid}` | Remove it from every device that broadcasts it |
+| `DELETE` | `/api/vlans/{id}` | Remove its network from the router, delete it from every device, then from the catalog; 409 when a device cannot (it names it), or `destructive` (Omini's network) until `?confirm=1` |
 | `POST` | `/api/nodes/{id}/vlan-plan` | Body `{port, value}` (`value`: `{untagged, tagged}`): what putting the port in those VLANs changes: `steps` (`node_id`, `kind`, `port`, `value`, `protected` when destructive) and `notes` (`node_id`, `reason`: `router`, `unmanaged` or `unknown_port`, `vlans`) |
 | `POST` | `/api/nodes/{id}/vlans` | Body `{port, value, confirm}`: apply that plan step by step; 409 like a change for a destructive step, 502 with the `changes` made when a device refuses |
 
@@ -115,7 +119,7 @@ the integration reported, in the [plugin data model](plugins.md#what-to-return).
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/dns-dhcp` | The **DNS & DHCP** screen: `dhcp` (`checks`: per interface, the `offers` with `known` and the server's `node_id`; `pools` and `leases` the routers report, with the `node_id` of the server and the `client` on the map) and `dns` (`servers`: each with its `external` and `local` test queries and its `node_id`), and `generated_at` |
+| `GET` | `/api/dns-dhcp` | The **DNS & DHCP** tab: `dhcp` (`checks`: per interface, the `offers` with `known` and the server's `node_id`; `pools` and `leases` the routers report, with the `node_id` of the server and the `client` on the map) and `dns` (`servers`: each with its `external` and `local` test queries and its `node_id`), and `generated_at` |
 
 ## Inventory
 

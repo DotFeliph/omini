@@ -79,7 +79,9 @@ ApplyFn = Callable[[Config, Change], Iterable[Device | dict[str, Any]]]
 
 def _devices(items: Iterable[Device | dict[str, Any]]) -> dict[str, Any]:
     devices = [d if isinstance(d, Device) else Device.model_validate(d) for d in items]
-    return {"devices": [d.model_dump(mode="json", exclude_none=True) for d in devices]}
+    return {
+        "devices": [d.model_dump(mode="json", exclude_none=True, by_alias=True) for d in devices]
+    }
 
 
 class Plugin:

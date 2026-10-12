@@ -3,7 +3,15 @@ import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import type { EdgeMouseEvent, NodeMouseEvent } from '@vue-flow/core'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
-import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
+import {
+  computed,
+  defineAsyncComponent,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  shallowRef,
+  watch,
+} from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 
@@ -29,12 +37,14 @@ import { useMapLayout } from '@/composables/useMapLayout'
 import { useNetworkFilter } from '@/composables/useNetworkFilter'
 import { alertsState, attentionCount } from '@/lib/alerts'
 import { api } from '@/lib/api'
-import { areaIdOf } from '@/lib/areas'
+import { areaIdOf, densest } from '@/lib/areas'
 import { isWifiNetwork } from '@/lib/graph'
 import { displayName } from '@/lib/names'
+import { networkColor } from '@/lib/networks'
 import { prefs } from '@/lib/prefs'
 import { linkSeries, type LinkSeries } from '@/lib/traffic'
 import type { Integration, MapArea, TopoNode, TopologyResponse } from '@/lib/types'
+import { vlanHex } from '@/lib/vlans'
 
 // The export dialog (and what builds the files) is loaded when it is opened.
 const ExportDialog = defineAsyncComponent(() => import('@/components/map/ExportDialog.vue'))
@@ -43,7 +53,7 @@ const POLL_MS = 10_000
 
 const { t } = useI18n()
 const router = useRouter()
-const { viewport, screenToFlowCoordinate } = useVueFlow('omini-map')
+const { viewport, screenToFlowCoordinate, fitView } = useVueFlow('omini-map')
 
 const data = shallowRef<TopologyResponse>()
 const integrations = ref<Integration[]>([])
@@ -55,6 +65,8 @@ let timer: ReturnType<typeof setInterval> | undefined
 const mapEl = ref<HTMLElement>()
 // Map areas: declared before the view, which collapses them.
 const areas = ref<MapArea[]>([])
+/** The VLANs' colors in the catalog (the VLANs screen), for their areas and the filter. */
+const vlanColors = ref(new Map<number, string>())
 
 const {
   allNodes,
@@ -73,7 +85,7 @@ const {
   summary,
   nodeById,
   onMap,
-} = useMapGraph(data, areas)
+} = useMapGraph(data, areas, vlanColors)
 const {
   takeAnchor,
   expand,
@@ -123,7 +135,41 @@ const {
   collapseArea,
   toMap: screenToFlowCoordinate,
 })
-const { networkGroups, netFilter, inNet, netFrames } = useNetworkFilter(mapGraph, view, nodeBoxes)
+const { networkGroups, netFilter, inNet, netFrames, focusIds } = useNetworkFilter(
+  mapGraph,
+  view,
+  nodeBoxes,
+)
+
+/** Each network's color, the same in the filter and on its area. */
+const netColors = computed(
+  () => new Map(networkGroups.value.map((g, i) => [g.key, networkColor(g, i, vlanColors.value)])),
+)
+async function loadVlanColors() {
+  try {
+    const list = await api.vlans()
+    vlanColors.value = new Map(list.filter((v) => v.color).map((v) => [v.id, vlanHex(v.color)]))
+  } catch {
+    // the palette's colors then
+  }
+}
+
+// Picking a network zooms the map to it.
+/** Below this zoom the map is too small to read: the network's busiest part is shown instead. */
+const READABLE_ZOOM = 0.55
+// Picking a network zooms the map to it: all of it when it fits at a
+// readable zoom, else its busiest part (the rest stays highlighted).
+watch(netFilter, (key) => {
+  const ids = focusIds.value
+  const el = mapEl.value
+  if (!key || !ids?.size || !el) return
+  // A member folded into a bubble is the bubble on the map.
+  const boxes = onMap([...ids])
+    .map((id) => nodeBoxes.value.get(id))
+    .filter((b) => !!b)
+  const shown = densest(boxes, el.clientWidth / READABLE_ZOOM, el.clientHeight / READABLE_ZOOM)
+  if (shown.length) void fitView({ nodes: shown, duration: 500, padding: 0.15, maxZoom: 1.2 })
+})
 const { flowNodes, flowEdges, linkLabels } = useFlowElements({
   view,
   nodes,
@@ -131,12 +177,13 @@ const { flowNodes, flowEdges, linkLabels } = useFlowElements({
   positions,
   direction,
   visibleAreas,
-  netFrames,
+  // With the networks' areas drawn, the filter needs no frames of its own.
+  netFrames: computed(() => (prefs.networkAreas ? [] : netFrames.value)),
   inNet,
   failedIntegrations,
   insetOf,
 })
-const { devicesOpen, showDevice, focusRequested } = useMapFocus({
+const { devicesOpen, menuTab, showDevice, focusRequested } = useMapFocus({
   nodeById,
   view,
   selectedId,
@@ -234,7 +281,13 @@ async function refresh() {
   }
 }
 
+/**
+ * A fresh layout, simplified: every node with two or more clients folds them
+ * into a bubble (what the user expanded folds again).
+ */
 async function resetLayout() {
+  prefs.foldAll = true
+  prefs.expanded = []
   await api.resetLayout()
   forget()
   if (data.value) data.value = { ...data.value, layout: {} }
@@ -277,6 +330,7 @@ function patchSelected(patch: Partial<TopoNode>) {
 
 onMounted(() => {
   load()
+  void loadVlanColors()
   timer = setInterval(load, POLL_MS)
   window.addEventListener('keydown', onDrawKey)
 })
@@ -290,6 +344,14 @@ onBeforeUnmount(() => {
   <div ref="mapEl" class="map">
     <DevicesDrawer
       v-if="devicesOpen"
+      v-model:tab="menuTab"
+      v-model:net-filter="netFilter"
+      v-model:show-hidden="showHidden"
+      :summary="summary"
+      :network-groups="networkGroups"
+      :colors="netColors"
+      :offline-count="offlineCount"
+      :hidden-count="hiddenCount"
       @close="devicesOpen = false"
       @select="showDevice"
       @changed="load"
@@ -297,15 +359,12 @@ onBeforeUnmount(() => {
     <MapToolbar
       v-model:devices-open="devicesOpen"
       v-model:net-filter="netFilter"
-      v-model:show-hidden="showHidden"
       v-model:drawing="drawing"
       :summary="summary"
       :attention="attention"
       :generated-at="data?.generated_at"
       :now="now"
-      :offline-count="offlineCount"
       :network-groups="networkGroups"
-      :hidden-count="hiddenCount"
       :exporting="exporting"
       :refreshing="refreshing"
       @export="exportOpen = true"

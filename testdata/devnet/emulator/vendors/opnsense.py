@@ -21,6 +21,7 @@ from typing import Any
 from ..model import Node, Port
 from ..server import HttpService, Request, Response
 from ..world import WEEK0, Snapshot, h01
+from . import opnsense_config as config
 
 # --- static dressing (consistent with acme.py) --------------------------------------------------------------------
 
@@ -125,7 +126,16 @@ class OPNsense(HttpService):
             return Response.html_title("Page not found | OPNsense", status=404)
         if not self._authorized(req):
             return Response.json({"status": 401, "message": "Authentication Failed"}, 401)
-        route = ROUTES.get(req.path.rstrip("/"))
+        # What the API changes (26.7: assignments, VLANs, Kea, rules) lives in a
+        # configuration of its own, started from the design.
+        path = req.path.rstrip("/")
+        if req.method == "POST":
+            status, out = config.post(self._config(snap), path, req.json() or {})
+            return Response.json(out, status)
+        got = config.get(self._config(snap), path)
+        if got is not None:
+            return Response.json(got)
+        route = ROUTES.get(path)
         if route is None:
             return Response.json({"errorMessage": "Endpoint not found", "errorTitle": "Error"}, 404)
         if req.method not in ("GET", "HEAD"):
@@ -148,6 +158,12 @@ class OPNsense(HttpService):
     @property
     def fw(self) -> str:
         return self.node
+
+    def _config(self, snap: Snapshot) -> config.Config:
+        cfg = getattr(self, "_cfg", None)
+        if cfg is None:
+            cfg = self._cfg = config.initial(self._assigned(self._n(snap)), self._n(snap), snap)
+        return cfg
 
     def _n(self, snap: Snapshot) -> Node:
         return snap.node(self.fw)

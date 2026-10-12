@@ -20,21 +20,24 @@ attention.
 
 The bar at the top shows:
 
-- **N devices · N clients**: the network devices (routers, switches, access
-  points, servers with an integration, unmanaged gear) and the online clients.
-  Click it to open the [device list](#the-device-list).
+- **The menu** (☰): a drawer with three tabs: **Devices** (the
+  [device list](#the-device-list), with the switches for offline and hidden
+  devices), **VLANs** ([the network's VLANs](#the-networks-vlans) and
+  subnets: a click on one is the [network filter](#vlan-and-subnet-filter);
+  the [networks' areas](#the-networks-areas) switch) and **DNS & DHCP** (see
+  [discovery](discovery.md)). A dot on it means the map is filtered;
+  the network being highlighted shows next to it, with an × to clear it.
 - **N alerts**: open critical and warning alerts. Click it to open the
   Alerts screen.
 - **N problems**: integrations whose last collection failed.
 - **Updated ...**: when the map was last built.
 
-The toolbar has **Hide offline**, the [VLAN / subnet filter](#vlan-and-subnet-filter),
-**Show hidden (N)**, the orientation toggle, **New area**, **Export**,
-**Reset layout** and **Refresh now** (starts a collection round).
+The toolbar on the right has the orientation toggle, **New area**,
+**Export**, **Reset layout** and **Refresh now** (starts a collection round).
 
 Devices that went offline stay on the map, dimmed, for one hour; after that
-they leave the map but stay in the device list. **Hide offline** removes them
-at once.
+they leave the map but stay in the device list. Unchecking **Offline
+devices** in the menu's Devices tab removes them at once.
 
 ## Layout
 
@@ -57,8 +60,10 @@ nodes, link labels and areas they do not belong to.
 
 - **Drag** any node to move it. Positions are saved on the server, separately
   for each orientation.
-- **Reset layout** forgets the dragged positions and lays the map out again.
-  Areas are kept.
+- **Reset layout** forgets the dragged positions and lays the map out again,
+  simplified: every node with two or more clients folds them into a bubble
+  (what you had unfolded folds again). Areas are kept. Changing the
+  threshold in **Settings → Map** goes back to folding above it.
 - When you fold or unfold a group, the node you clicked stays still on screen
   and the map makes room around it. The view only refits on first load, on an
   orientation change, on reset and when the sidebar opens or closes.
@@ -213,13 +218,33 @@ traffic), DHCP pool usage and firewall states (yellow from 75 %, red from
 
 ## The network's VLANs
 
-**VLANs** in the menu lists the network's VLANs: id, name, color, subnet, and
+The **VLANs** tab of the map's menu (☰) lists the network's VLANs: id, name, color, subnet, and
 on which devices and ports each one is. Omini keeps them: the first time it
 imports those the devices already have, and from then on you create, rename
 and delete them here, and Omini applies it to the devices (a new name to
 every device that has the VLAN; a deleted VLAN from every device, which must
 not use it on a port any more). A VLAN created on a device by hand is an
 alert (`vlan_unknown`). Ports go into VLANs from their card (above).
+
+**Creating a VLAN** asks for its id and name; with a router Omini can change
+(OPNsense 26.7 or later), the same form has its gateway (suggested), DHCP
+(on, .100 to .250) and its access: **Internet only**, **Whole network** or
+**No internet**, plus **Discovery between VLANs**. Omini shows what it will do
+on the router and applies it in one go. **Opening a VLAN** shows the front of
+each switch: a click on a port puts it in the VLAN, then tags it (trunk),
+then takes it out, showing the plan before applying. Each VLAN can have a **Wi-Fi network**: its
+name (the VLAN's by default), password and on or off, created on every access
+point or controller Omini manages (UniFi, Omada, OpenWrt); the password goes
+to them only. From a device's panel (**Network**) you can **fix its address**
+(a DHCP reservation on the router) and **move it to another VLAN** (its
+switch port changes, with the plan; others on the same port move too). A
+Proxmox VM or container moves by its own network device (its tag), with the
+switch port of its host tagged on the way; the host's bridge must be VLAN
+aware.
+The operator's VLAN under the WAN (PPPoE) is not listed. Networks that already
+exist on the router (the LAN is VLAN 1) are imported with their gateway,
+DHCP and access, and can be changed here too; access set by hand shows as
+**Custom** until you pick one of the three.
 
 ## Folding children into bubbles
 
@@ -245,8 +270,8 @@ per browser.
 ## Hiding and deleting devices
 
 - **Hide** (device panel) takes the device and everything below it off the
-  map. It stays in the device list, marked "Hidden". **Show hidden (N)** in
-  the toolbar brings hidden devices (and hidden areas) back for a while;
+  map. It stays in the device list, marked "Hidden". **Hidden devices** in
+  the menu's Devices tab brings hidden devices (and hidden areas) back for a while;
   **Show on map** in the panel or the list unhides one.
 - **Delete** (click twice to confirm) removes the device and its history from
   Omini. If it is still on the network, it comes back on the next scan: use
@@ -301,8 +326,12 @@ layout** keeps them.
 
 ## VLAN and subnet filter
 
-When the network has more than one VLAN or subnet, a picker appears in the
-toolbar. Pick one to **highlight** it and dim everything else:
+When the network has more than one VLAN or subnet (VLANs, LAN, WAN...), the
+menu's **VLANs** tab lists them (the VLANs, then the other subnets), each
+with its color, address range and number of devices. A click on one
+**highlights** it, dims everything else and **zooms the map to it** (the menu
+closes to show it); a click on it again, or the × next to the menu, clears
+it. What is highlighted:
 
 - devices with an interface in it,
 - links whose port carries it (untagged or tagged),
@@ -310,17 +339,35 @@ toolbar. Pick one to **highlight** it and dim everything else:
 - and what hangs below a device that is only in that network.
 
 A router with addresses in several networks lights up alone, without
-everything below it. Each linked group of highlighted devices gets a
-**temporary dashed frame** with the network's name; the frames go away when
-you pick **All networks**.
+everything below it. With the [networks' areas](#the-networks-areas) off,
+each linked group of highlighted devices gets a **temporary dashed frame**
+with the network's name; the frames go away when the filter is cleared.
 
 VLAN 1 is listed only when it has a name. VLANs come from the integrations
 (OPNsense, MikroTik, UniFi, SNMP switches...).
 
+## The networks' areas
+
+Every VLAN and subnet is drawn as an **area** on the map, in its color (a
+VLAN's color from the VLANs tab), so the whole network's VLANs and address
+ranges are seen at once. They follow the same rules as the areas you draw:
+an area holds its devices and what hangs below them, nothing else, and the
+layout keeps each network's devices together.
+
+- A device in **several networks** (the router, a trunk switch, an access
+  point carrying many VLANs) stays **outside** every network's area.
+- A client's own address says which network it is in, whatever the link
+  above it carries (a client under a trunk is not in every VLAN of it).
+- A device in an area you drew stays in yours.
+- The networks' areas are not stored and cannot be moved, resized or renamed:
+  they follow their devices. **Network areas** in the menu's VLANs tab
+  turns them off.
+
 ## The device list
 
-The **N devices · N clients** chip at the top left opens the inventory in a
-drawer (`/devices` opens it too). It lists everything ever seen on the
+The menu (☰) at the top left opens the inventory in a drawer, in the
+**Devices** tab, with the count of devices and clients (`/devices` opens it
+too). It lists everything ever seen on the
 network:
 
 - name, IP, MAC, type, where it is connected, first and last seen,

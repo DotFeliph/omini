@@ -3,15 +3,22 @@ import { computed, ref, type Ref } from 'vue'
 import { collapseAreas } from '@/lib/areas'
 import { collapseClients, withoutHidden, withoutOffline, withWifiNetworks } from '@/lib/graph'
 import type { Direction } from '@/lib/layout'
+import { networkAreas } from '@/lib/networks'
 import { prefs } from '@/lib/prefs'
 import type { MapArea, TopologyResponse } from '@/lib/types'
 
 /**
  * The graph the map draws, from the topology: hidden and offline devices left
  * out (unless asked for), Wi-Fi networks as mini nodes, clients folded into
- * bubbles and collapsed areas into one.
+ * bubbles and collapsed areas into one. Every VLAN and subnet is an area of
+ * its own too (unless turned off in the menu's filters).
  */
-export function useMapGraph(data: Ref<TopologyResponse | undefined>, areas: Ref<MapArea[]>) {
+export function useMapGraph(
+  data: Ref<TopologyResponse | undefined>,
+  areas: Ref<MapArea[]>,
+  /** The VLANs' colors in the catalog, for their areas. */
+  vlanColors: Ref<Map<number, string>> = ref(new Map()),
+) {
   const allNodes = computed(() => data.value?.topology.nodes ?? [])
   const allEdges = computed(() => data.value?.topology.edges ?? [])
   /** Shows the devices the user hid (to bring one back); not remembered. */
@@ -42,8 +49,35 @@ export function useMapGraph(data: Ref<TopologyResponse | undefined>, areas: Ref<
   const expandAll = ref(false)
   const exportDirection = ref<Direction>()
   const direction = computed(() => exportDirection.value ?? prefs.layoutDirection)
-  /** Areas on the map: the ones the user drew (VLANs and subnets are a filter, not areas). */
-  const liveAreas = computed(() => areas.value.filter((a) => !a.hidden || showHidden.value))
+  const userAreas = computed(() => areas.value.filter((a) => !a.hidden || showHidden.value))
+  /**
+   * The VLANs' and subnets' areas: devices in several networks stay outside
+   * them, and so do clients folded into one bubble with clients of another
+   * network (the bubble cannot be in two areas).
+   */
+  const netAreas = computed(() => {
+    if (!prefs.networkAreas) return []
+    const make = (drop?: Set<string>) =>
+      networkAreas(
+        mapGraph.value.nodes,
+        mapGraph.value.edges,
+        userAreas.value,
+        direction.value,
+        vlanColors.value,
+        drop,
+      )
+    const first = make()
+    const areaOf = new Map<string, number>()
+    for (const a of first) for (const m of a.members) areaOf.set(m, a.id)
+    const drop = new Set<string>()
+    for (const g of clientView.value.groups) {
+      const ids = new Set(g.clients.map((c) => areaOf.get(c.id)))
+      if (ids.size > 1) for (const c of g.clients) drop.add(c.id)
+    }
+    return drop.size ? make(drop) : first
+  })
+  /** Areas on the map: the ones the user drew, then the networks'. */
+  const liveAreas = computed(() => [...userAreas.value, ...netAreas.value])
   /** Areas collapsed into a bubble (whatever the orientation they were drawn in). */
   const collapsedAreaList = computed(() =>
     liveAreas.value.filter((a) => prefs.collapsedAreas.includes(a.id)),
@@ -52,7 +86,7 @@ export function useMapGraph(data: Ref<TopologyResponse | undefined>, areas: Ref<
     collapseClients(
       mapGraph.value.nodes,
       mapGraph.value.edges,
-      prefs.collapseThreshold,
+      prefs.foldAll ? 1 : prefs.collapseThreshold,
       expanded.value,
       forced.value,
     ),

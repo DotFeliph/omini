@@ -170,6 +170,20 @@
           },
           "description": "VLANs defined on the device."
         },
+        "networks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Network"
+          },
+          "description": "Networks the router serves (each VLAN's interface, gateway, DHCP and access); VLAN 1 is the untagged LAN."
+        },
+        "wifi_networks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WifiNetwork"
+          },
+          "description": "Wi-Fi networks the device (an access point, or a controller for its site) broadcasts, with their VLAN."
+        },
         "services": {
           "type": "array",
           "items": {
@@ -190,6 +204,13 @@
             "$ref": "#/$defs/DhcpPool"
           },
           "description": "Usage of each DHCP range."
+        },
+        "dhcp_reservations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DhcpReservation"
+          },
+          "description": "Fixed addresses the DHCP server hands out (reservations)."
         },
         "dhcp_checks": {
           "type": "array",
@@ -658,12 +679,18 @@
     },
     "ChangeKind": {
       "type": "string",
-      "description": "A configuration change Omini knows. port.enabled: enable (true) or disable (false) a port. port.vlans: the port's VLANs, a PortVlans (access: untagged only; trunk: untagged as the native VLAN, or none, and the tagged list), only VLANs the device has. vlan.set: create a VLAN on the device, or rename it ({id, name}). vlan.delete: delete a VLAN from the device ({id}).",
+      "description": "A configuration change Omini knows. port.enabled: enable (true) or disable (false) a port. port.vlans: the port's VLANs, a PortVlans (access: untagged only; trunk: untagged as the native VLAN, or none, and the tagged list), only VLANs the device has. vlan.set: create a VLAN on the device, or rename it ({id, name}). vlan.delete: delete a VLAN from the device ({id}). network.set: create or change a VLAN's network on the router (a Network: interface, gateway, DHCP, access, mDNS). network.delete: remove it ({vlan}). reservation.set: a fixed address for a MAC on the router's DHCP (a DhcpReservation). reservation.delete: remove it ({mac}). wifi.set: create or change a Wi-Fi network (a WifiChange: its name, VLAN, password, on or off). wifi.delete: remove it ({ssid}).",
       "enum": [
         "port.enabled",
         "port.vlans",
         "vlan.set",
-        "vlan.delete"
+        "vlan.delete",
+        "network.set",
+        "network.delete",
+        "reservation.set",
+        "reservation.delete",
+        "wifi.set",
+        "wifi.delete"
       ]
     },
     "Change": {
@@ -688,7 +715,7 @@
           "description": "Interface name, for the changes of a port."
         },
         "value": {
-          "description": "The new value: a boolean for port.enabled, a PortVlans object for port.vlans, {id, name} for vlan.set, {id} for vlan.delete."
+          "description": "The new value: a boolean for port.enabled, a PortVlans object for port.vlans, {id, name} for vlan.set, {id} for vlan.delete, a Network for network.set, {vlan} for network.delete, a DhcpReservation for reservation.set, {mac} for reservation.delete, a WifiChange for wifi.set, {ssid} for wifi.delete."
         }
       }
     },
@@ -1093,6 +1120,146 @@
         }
       }
     },
+    "Network": {
+      "type": "object",
+      "description": "A VLAN's network on a router: its interface, gateway, DHCP range, access and discovery.",
+      "required": [
+        "vlan"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "vlan": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4094,
+          "description": "The VLAN; 1 is the untagged LAN."
+        },
+        "name": {
+          "type": "string",
+          "description": "The interface's description (\"IOT\")."
+        },
+        "interface": {
+          "type": "string",
+          "description": "The router's name for the interface (\"lan\", \"opt3\"), empty when the router has none yet."
+        },
+        "device": {
+          "type": "string",
+          "description": "Its device (\"vlan0.30\", \"igb1\")."
+        },
+        "parent": {
+          "type": "string",
+          "description": "The port the VLAN rides on (\"igb1\"); empty: the router's port toward the switches."
+        },
+        "gateway": {
+          "type": "string",
+          "description": "The router's address with the prefix, e.g. \"192.168.30.1/24\"."
+        },
+        "dhcp": {
+          "$ref": "#/$defs/NetworkDhcp"
+        },
+        "access": {
+          "$ref": "#/$defs/NetworkAccess"
+        },
+        "mdns": {
+          "type": "boolean",
+          "description": "Discovery (mDNS) repeated to and from the other networks that have it."
+        }
+      }
+    },
+    "NetworkDhcp": {
+      "type": "object",
+      "description": "A network's DHCP: on or off and its range.",
+      "required": [
+        "enabled"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "from": {
+          "type": "string",
+          "description": "First address of the range."
+        },
+        "to": {
+          "type": "string",
+          "description": "Last address of the range."
+        }
+      }
+    },
+    "NetworkAccess": {
+      "type": "string",
+      "description": "What a network reaches through the router. internet: the internet, no other network. all: the internet and every other network. local: its own network only. custom: rules set by hand that are none of these (reported only, never set).",
+      "enum": [
+        "internet",
+        "all",
+        "local",
+        "custom"
+      ]
+    },
+    "WifiNetwork": {
+      "type": "object",
+      "description": "A Wi-Fi network (SSID) and the VLAN it puts its clients in.",
+      "required": [
+        "ssid"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "ssid": {
+          "type": "string"
+        },
+        "vlan": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4094,
+          "description": "The VLAN of its clients; empty: the untagged LAN."
+        },
+        "security": {
+          "type": "string",
+          "enum": [
+            "open",
+            "wpa2",
+            "wpa3",
+            "wpa2wpa3"
+          ],
+          "description": "How it is secured."
+        },
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "WifiChange": {
+      "type": "object",
+      "description": "A Wi-Fi network to create or change (wifi.set). previous renames one; an empty password keeps the current one.",
+      "required": [
+        "ssid"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "ssid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "previous": {
+          "type": "string",
+          "description": "Its current name, when it is renamed."
+        },
+        "vlan": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4094
+        },
+        "password": {
+          "type": "string",
+          "description": "WPA2 passphrase, 8 to 63 characters; empty keeps the current one. Never kept in Omini."
+        },
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
     "Service": {
       "type": "object",
       "description": "A service (daemon) running on the device.",
@@ -1183,6 +1350,28 @@
           "type": "integer",
           "minimum": 0,
           "description": "Active leases."
+        }
+      }
+    },
+    "DhcpReservation": {
+      "type": "object",
+      "description": "A fixed address the DHCP server hands out to one MAC.",
+      "required": [
+        "mac",
+        "ip"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "mac": {
+          "$ref": "#/$defs/MACAddress"
+        },
+        "ip": {
+          "type": "string",
+          "description": "IPv4 address."
+        },
+        "name": {
+          "type": "string",
+          "description": "Host name given with it."
         }
       }
     },

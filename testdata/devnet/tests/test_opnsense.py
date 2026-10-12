@@ -238,3 +238,63 @@ def test_login_page(emu: Emulator) -> None:
     emu.set_time(TUE_1030)
     with urllib.request.urlopen(emu.urls[FW2] + "/", context=ctx, timeout=10) as r:
         assert "<title>Login | OPNsense</title>" in r.read().decode()
+
+
+# -- networks (26.7: interface assignments, VLANs, Kea and rules through the API) --
+
+
+def networks_of(dev: dict[str, Any]) -> dict[int, dict[str, Any]]:
+    return {n["vlan"]: n for n in dev.get("networks") or []}
+
+
+def test_reads_each_vlans_network(emu: Emulator) -> None:
+    emu.set_time(TUE_1030)
+    out = emu.collect(FW1)
+    nets = networks_of(out["devices"][0])
+    # The design's routed VLANs, each with its DHCP pool where HQ has one.
+    for vid, name, subnet in ROUTED:
+        if vid == 10:
+            continue  # the LAN (MGMT) is VLAN 10 here: no untagged LAN
+        assert vid in nets, (vid, name)
+        assert nets[vid]["gateway"].rsplit(".", 1)[0] == subnet.rsplit(".", 1)[0], nets[vid]
+
+
+def test_creates_changes_and_removes_a_network(emu: Emulator) -> None:
+    emu.set_time(TUE_1030)
+    before = networks_of(emu.collect(FW1)["devices"][0])
+    parent = next(n for n in before.values() if n.get("parent"))["parent"]
+    want = {
+        "vlan": 77,
+        "name": "LABNET",
+        "parent": parent,
+        "gateway": "10.77.0.1/24",
+        "dhcp": {"enabled": True, "from": "10.77.0.100", "to": "10.77.0.199"},
+        "access": "internet",
+    }
+    out = emu.collect(FW1, "apply", change={"device": "x", "kind": "network.set", "value": want})
+    assert "error" not in out, out.get("error")
+    got = networks_of(out["devices"][0])[77]
+    assert (got["gateway"], got["access"], got["dhcp"]["from"]) == ("10.77.0.1/24", "internet", "10.77.0.100")
+    assert any(v["id"] == 77 for v in out["devices"][0]["vlans"])
+
+    want["access"] = "local"
+    out = emu.collect(FW1, "apply", change={"device": "x", "kind": "network.set", "value": want})
+    assert networks_of(out["devices"][0])[77]["access"] == "local"
+
+    out = emu.collect(FW1, "apply", change={"device": "x", "kind": "network.delete", "value": {"vlan": 77}})
+    assert "error" not in out, out.get("error")
+    assert 77 not in networks_of(out["devices"][0])
+
+
+def test_fixes_an_address(emu: Emulator) -> None:
+    emu.set_time(TUE_1030)
+    value = {"mac": "02:00:00:00:77:01", "ip": "10.10.30.77", "name": "printer"}
+    out = emu.collect(FW1, "apply", change={"device": "x", "kind": "reservation.set", "value": value})
+    assert "error" not in out, out.get("error")
+    assert {"mac": "02:00:00:00:77:01", "ip": "10.10.30.77", "name": "printer"} in out["devices"][0][
+        "dhcp_reservations"
+    ]
+    out = emu.collect(
+        FW1, "apply", change={"device": "x", "kind": "reservation.delete", "value": {"mac": value["mac"]}}
+    )
+    assert not any(r["mac"] == value["mac"] for r in out["devices"][0].get("dhcp_reservations") or [])

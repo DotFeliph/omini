@@ -113,6 +113,10 @@ class UniFi(HttpService):
         super().__init__(*a, **kw)
         self.sessions: dict[str, float] = {}  # unifises → expiry (controller clock)
         self.overrides: dict[str, list[dict[str, Any]]] = {}  # device → port_overrides, once written
+        # The site's WLANs once one is written (else the design's), and the
+        # networks added for them ("VLAN only").
+        self.wlans: list[dict[str, Any]] | None = None
+        self.added_networks: list[dict[str, Any]] = []
 
     @property
     def read_only(self) -> bool:
@@ -187,6 +191,7 @@ class UniFi(HttpService):
             "rest/networkconf": self.networkconf,
             "rest/wlanconf": self.wlanconf,
             "rest/portconf": self.portconf,
+            "rest/usergroup": lambda _snap: [{"_id": oid("usergroup", "default"), "name": "Default"}],
         }.get(endpoint)
         if fn is None:
             return err("api.err.NotFound", 404)
@@ -199,6 +204,8 @@ class UniFi(HttpService):
         site, _, endpoint = path[len("/api/s/") :].partition("/")
         if site != SITE["name"]:
             return err("api.err.NoSiteContext", 400)
+        if endpoint.startswith(("rest/wlanconf", "rest/networkconf")):
+            return self.write_wifi(req, endpoint)
         kind, _, _id = endpoint.rpartition("/")
         design = self.ctx.world.d
         n = next(
@@ -226,6 +233,39 @@ class UniFi(HttpService):
                 p.admin_up = by_idx.get(p.index, {}).get("forward") != "disabled"
         self.overrides[n.name] = overrides
         return ok([{"_id": _id, "mac": n.mac, "port_overrides": overrides}])
+
+    def write_wifi(self, req: Request, endpoint: str) -> Response:
+        """POST/PUT/DELETE rest/wlanconf[/<_id>] and POST rest/networkconf: the
+        site's Wi-Fi networks (kept here; the password is never shown back)."""
+        try:
+            body = req.json() or {}
+        except ValueError:
+            return err("api.err.Invalid", 400)
+        snap = self.ctx.snapshot()
+        if self.wlans is None:
+            self.wlans = self.wlanconf(snap)
+        if endpoint == "rest/networkconf" and req.method == "POST":
+            made = {"_id": oid("network", "added", len(self.added_networks)), "site_id": SITE["_id"], **body}
+            self.added_networks.append(made)
+            return ok([made])
+        if endpoint == "rest/wlanconf" and req.method == "POST":
+            if not body.get("name") or not body.get("x_passphrase") or not body.get("networkconf_id"):
+                return err("api.err.Invalid", 400)
+            made = {"_id": oid("wlan", body["name"]), "site_id": SITE["_id"], **body}
+            made.pop("x_passphrase", None)
+            self.wlans.append(made)
+            return ok([made])
+        _, _, _id = endpoint.partition("rest/wlanconf/")
+        w = next((w for w in self.wlans if w["_id"] == _id), None)
+        if w is None:
+            return err("api.err.NotFound", 404)
+        if req.method == "DELETE":
+            self.wlans.remove(w)
+            return ok([])
+        if req.method == "PUT":
+            w.update({k: v for k, v in body.items() if k != "x_passphrase"})
+            return ok([w])
+        return err("api.err.NotFound", 404)
 
     def port_overrides(self, n: Node) -> list[dict[str, Any]]:
         """As written, else what the design says (its disabled ports)."""
@@ -957,9 +997,11 @@ class UniFi(HttpService):
                     "site_id": SITE["_id"],
                 }
             )
-        return out
+        return out + self.added_networks
 
     def wlanconf(self, snap: Snapshot) -> list[dict[str, Any]]:
+        if self.wlans is not None:
+            return self.wlans
         out = []
         for s in SSIDS:
             ssid = snap.design.ssids.get(s)

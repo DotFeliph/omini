@@ -15,8 +15,8 @@ Objects served: system (board, info), network.device (status),
 network.interface (dump), iwinfo (devices, info, assoclist), luci-rpc
 (getHostHints, getDHCPLeases), file (read, list: /proc/net/arp and the
 thermal zones), hostapd.<ifname> (get_clients), session (login, access) and
-uci on the network config (get, set, add, delete, revert, changes, apply with
-rollback, confirm, rollback), like rpcd: changes are staged per session,
+uci on the network and wireless configs (get, set, add, delete, revert,
+changes, apply with rollback, confirm, rollback), like rpcd: changes are staged per session,
 `apply` saves them and reloads the network (a port whose `config device`
 section has `enabled '0'` goes down: netifd shows it `"present": false` and
 leaves it out of the full status), and with rollback the previous file comes
@@ -65,7 +65,7 @@ ACL: dict[str, dict[str, list[str]]] = {
         "uci": ["get", "set", "add", "delete", "revert", "apply", "confirm", "rollback"],
     },
     # rpcd's "uci" scope: which configs the login may read and write.
-    "uci": {"network": ["read", "write"]},
+    "uci": {"network": ["read", "write"], "wireless": ["read", "write"]},
     "file": {
         "/proc/net/arp": ["read"],
         "/sys/class/thermal": ["list"],
@@ -220,9 +220,12 @@ class OpenWrt(HttpService):
         # /etc/config/network (section name → options, built on first use),
         # each session's staged copy, and the pending apply with rollback:
         # (session, the file before, deadline).
+        # /etc/config/<name>, each session's staged copies (config → sections)
+        # and the pending apply with rollback: (session, the files before, deadline).
         self.network: dict[str, dict[str, Any]] | None = None
-        self.staged: dict[str, dict[str, dict[str, Any]]] = {}
-        self.pending: tuple[str, dict[str, dict[str, Any]], float] | None = None
+        self.wireless: dict[str, dict[str, Any]] | None = None
+        self.staged: dict[str, dict[str, dict[str, dict[str, Any]]]] = {}
+        self.pending: tuple[str, dict[str, dict[str, dict[str, Any]]], float] | None = None
         self.sections = 0
 
     # ------------------------------------------------------------------ HTTP
@@ -597,6 +600,38 @@ class OpenWrt(HttpService):
             self.network = net
         return self.network
 
+    def _wireless(self, snap: Snapshot) -> dict[str, dict[str, Any]]:
+        """/etc/config/wireless as saved: a radio per band and an AP per Wi-Fi
+        interface, on the network of its SSID (the guest one, or the LAN)."""
+        if self.wireless is None:
+            n = snap.node(self.node)
+            wl: dict[str, dict[str, Any]] = {}
+            for phy in sorted({w.split("-")[0] for w in WIFI_IFACES}):
+                band = n.ports[f"{phy}-ap0"].band or "5"
+                wl[f"radio{phy[3:]}"] = {
+                    ".type": "wifi-device",
+                    "type": "mac80211",
+                    "band": "2g" if band == "2.4" else "5g",
+                    "country": "BR",
+                }
+            for dev in WIFI_IFACES:
+                ssid = self._ssid(snap, dev)
+                guest = any(x.name == ssid and x.guest for x in snap.design.ssids.values())
+                wl[f"default_{dev.replace('-', '_')}"] = {
+                    ".type": "wifi-iface",
+                    "device": f"radio{dev.split('-')[0][3:]}",
+                    "mode": "ap",
+                    "ssid": ssid,
+                    "encryption": "psk2",
+                    "key": "emulated-key",
+                    "network": "guest" if guest else "lan",
+                }
+            self.wireless = wl
+        return self.wireless
+
+    def _saved(self, snap: Snapshot) -> dict[str, dict[str, dict[str, Any]]]:
+        return {"network": self._network(snap), "wireless": self._wireless(snap)}
+
     def _new_section(self) -> str:
         self.sections += 1
         return f"cfg{self.sections:02x}0f15"
@@ -614,15 +649,16 @@ class OpenWrt(HttpService):
         return out
 
     def _uci(self, sid: str, func: str, args: dict[str, Any], snap: Snapshot) -> tuple[int, Any]:
-        saved = self._network(snap)
+        files = self._saved(snap)
         config = args.get("config")
         if func in ("get", "set", "add", "delete", "revert", "changes"):
-            if config != "network":
-                # Only the network config exists here; others are outside the ACL anyway.
+            if config not in files:
+                # Only the network and wireless configs exist here.
                 return (PERMISSION_DENIED, None) if not self._uci_allowed(config, "read") else (NOT_FOUND, None)
             if not self._uci_allowed(config, "read" if func in ("get", "changes") else "write"):
                 return PERMISSION_DENIED, None
-        work = self.staged.get(sid, saved)
+        saved = files.get(config, {}) if isinstance(config, str) else {}
+        work = self.staged.get(sid, {}).get(config, saved) if isinstance(config, str) else saved
         if func == "get":
             values = self._values(work)
             section, option = args.get("section"), args.get("option")
@@ -636,12 +672,14 @@ class OpenWrt(HttpService):
             kind = args.get("type")
             return OK, {"values": {k: v for k, v in values.items() if not kind or v[".type"] == kind}}
         if func == "changes":
-            return OK, {"changes": {"network": [["staged"]]} if sid in self.staged else {}}
+            return OK, {"changes": {c: [["staged"]] for c in self.staged.get(sid, {})}}
         if func == "revert":
-            self.staged.pop(sid, None)
+            self.staged.get(sid, {}).pop(config, None)
+            if not self.staged.get(sid):
+                self.staged.pop(sid, None)
             return OK, None
         if func in ("set", "add", "delete"):
-            work = self.staged.setdefault(sid, {k: dict(v) for k, v in saved.items()})
+            work = self.staged.setdefault(sid, {}).setdefault(config, {k: dict(v) for k, v in saved.items()})
             values = args.get("values")
             if func == "add":
                 kind = args.get("type")
@@ -670,10 +708,11 @@ class OpenWrt(HttpService):
                 return OK, None  # rpcd does nothing while an apply waits for confirmation
             if sid not in self.staged:
                 return NO_DATA, None
-            if not self._uci_allowed("network", "write"):
+            if not all(self._uci_allowed(c, "write") for c in self.staged[sid]):
                 return PERMISSION_DENIED, None
-            before = saved
-            self.network = self.staged.pop(sid)
+            before = {c: dict(v) for c, v in files.items()}
+            for c, v in self.staged.pop(sid).items():
+                setattr(self, c, v)
             if rollback:
                 timeout = args.get("timeout") if isinstance(args.get("timeout"), int) else APPLY_TIMEOUT
                 self.pending = (sid, before, snap.t + timeout)
@@ -697,7 +736,8 @@ class OpenWrt(HttpService):
 
     def _rollback(self) -> None:
         assert self.pending is not None
-        self.network = self.pending[1]
+        for c, v in self.pending[1].items():
+            setattr(self, c, v)
         self.pending = None
         self._reload()
 

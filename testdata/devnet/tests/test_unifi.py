@@ -219,3 +219,24 @@ def test_disable_and_enable_a_port() -> None:
         res = emu.collect("unifi", "apply", change=dict(change, value=False))
         assert "Full Management or Site Admin" in res["error"]
         assert ports(emu.collect("unifi"))["Port 30"]["enabled"] is True
+
+
+def test_a_vlans_wifi() -> None:
+    with Emulator(at=TUE_1030, apis=["unifi"], world=World()) as emu:
+
+        def wifi(res: dict) -> dict[str, dict]:
+            assert "error" not in res, res.get("error")
+            ap = next(d for d in res["devices"] if d.get("role") == "ap")
+            return {w["ssid"]: w for w in ap.get("wifi_networks") or []}
+
+        before = wifi(emu.collect("unifi"))
+        assert before and all(w.get("vlan") for w in before.values() if w["ssid"] != "ACME-CORP")
+        change = {
+            "device": "x",
+            "kind": "wifi.set",
+            "value": {"ssid": "ACME-LAB", "vlan": 77, "password": "correct horse"},
+        }
+        got = wifi(emu.collect("unifi", "apply", change=change))
+        assert got["ACME-LAB"]["vlan"] == 77
+        change = {"device": "x", "kind": "wifi.delete", "value": {"ssid": "ACME-LAB"}}
+        assert "ACME-LAB" not in wifi(emu.collect("unifi", "apply", change=change))

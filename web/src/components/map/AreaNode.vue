@@ -65,8 +65,16 @@ function onResizeEnd() {
 </script>
 
 <template>
-  <div class="area" :class="{ 'is-hidden': area.hidden }" :style="{ '--c': areaCss(area.color) }">
-    <div class="area-title" :title="t('map.areas.dragHint')" @dblclick.stop="emit('startRename')">
+  <div
+    class="area"
+    :class="{ 'is-hidden': area.hidden, auto: area.auto }"
+    :style="{ '--c': areaCss(area.color) }"
+  >
+    <div
+      class="area-title"
+      :title="area.auto ? t('map.areas.networkHint') : t('map.areas.dragHint')"
+      @dblclick.stop="!area.auto && emit('startRename')"
+    >
       <input
         v-if="editing"
         ref="input"
@@ -81,6 +89,7 @@ function onResizeEnd() {
       <span v-else>{{ area.name }}</span>
     </div>
     <div
+      v-if="!area.auto"
       class="resize nodrag nopan"
       data-test="resize"
       :title="t('map.areas.resize')"
@@ -102,6 +111,14 @@ function onResizeEnd() {
   border-radius: var(--radius);
   background: color-mix(in srgb, var(--c) 7%, transparent);
   pointer-events: none; /* the inside of an area never blocks the map or its nodes */
+}
+/* A network's area: a solid border, a title that is not a drag handle. */
+.area.auto {
+  border-style: solid;
+  border-width: 1.5px;
+}
+.area.auto .area-title {
+  cursor: default;
 }
 /* A hidden area, shown for a while with "Show hidden". */
 .area.is-hidden {

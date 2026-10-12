@@ -5,6 +5,7 @@ import {
   areaNodeId,
   clusterFrames,
   collapseAreas,
+  densest,
   fitArea,
   membersOf,
   rectFrom,
@@ -150,5 +151,21 @@ describe('clusterFrames', () => {
       { id: 'a', x: -10, y: -10, width: 320, height: 60 },
       { id: 'b', x: 190, y: 390, width: 120, height: 60 },
     ])
+  })
+})
+
+describe('densest', () => {
+  const box = (id: string, x: number, y = 0) => ({ id, x, y, width: 100, height: 50 })
+  it('takes everything when it fits', () => {
+    expect(densest([box('a', 0), box('b', 300)], 1000, 500)).toEqual(['a', 'b'])
+  })
+  it('takes the busiest window along the longer side', () => {
+    const boxes = [box('a', 0), box('b', 2000), box('c', 2200), box('d', 2400), box('e', 6000)]
+    expect(densest(boxes, 1000, 500)).toEqual(['b', 'c', 'd'])
+    const down = boxes.map((b) => ({ ...b, x: 0, y: b.x }))
+    expect(densest(down, 500, 1000)).toEqual(['b', 'c', 'd'])
+  })
+  it('takes nothing from nothing', () => {
+    expect(densest([], 100, 100)).toEqual([])
   })
 })

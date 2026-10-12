@@ -56,7 +56,9 @@ export function useFlowElements(options: {
       style: { width: `${a.width}px`, height: `${a.height}px` },
       zIndex: -1,
       dragHandle: '.area-title',
-      class: 'area-node',
+      // A network's area follows its devices: it is not moved by hand.
+      draggable: !a.auto,
+      class: a.auto ? 'area-node net-area' : 'area-node',
     }))
     const devices: Node<NodeData>[] = view.value.nodes.map((n) => ({
       id: n.id,

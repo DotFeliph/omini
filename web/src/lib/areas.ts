@@ -200,3 +200,23 @@ export function clusterFrames(
     })
     .sort((a, b) => a.y - b.y || a.x - b.x)
 }
+
+/** The most nodes that fit in a width × height window, along the longer side of their spread. */
+export function densest(boxes: Box[], width: number, height: number): string[] {
+  if (!boxes.length) return []
+  const spanX = Math.max(...boxes.map((b) => b.x + b.width)) - Math.min(...boxes.map((b) => b.x))
+  const spanY = Math.max(...boxes.map((b) => b.y + b.height)) - Math.min(...boxes.map((b) => b.y))
+  if (spanX <= width && spanY <= height) return boxes.map((b) => b.id)
+  const alongX = spanX / width >= spanY / height
+  const start = (b: Box) => (alongX ? b.x : b.y)
+  const end = (b: Box) => (alongX ? b.x + b.width : b.y + b.height)
+  const room = alongX ? width : height
+  const sorted = [...boxes].sort((p, q) => start(p) - start(q))
+  let best: Box[] = []
+  for (let i = 0, j = 0; i < sorted.length; i++) {
+    j = Math.max(j, i)
+    while (j + 1 < sorted.length && end(sorted[j + 1]!) - start(sorted[i]!) <= room) j++
+    if (j - i + 1 > best.length) best = sorted.slice(i, j + 1)
+  }
+  return best.map((b) => b.id)
+}

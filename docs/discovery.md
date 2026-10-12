@@ -231,7 +231,7 @@ Turn it off in **Integrations → Network scan → Methods → DHCP fingerprints
 ## DNS and DHCP checks
 
 Every round the network scan checks the services every device depends on.
-The results are on the **DNS & DHCP** screen (a tab each), and problems
+The results are in the **DNS & DHCP** tab of the map's menu (☰), and problems
 become alerts.
 
 - **DHCP**: on each network this server is on, Omini asks for an address

@@ -2,7 +2,6 @@
 import { CircleAlert, CircleCheck, CircleHelp, Search } from 'lucide-vue-next'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRoute, useRouter } from 'vue-router'
 
 import { api } from '@/lib/api'
 import { formatAgo, formatUptime } from '@/lib/format'
@@ -15,18 +14,17 @@ import { DNS_SLOW_MS } from '@/lib/services'
  * DHCP, how each DNS server resolves), with the pools and leases the routers
  * report. A tab each.
  */
+const emit = defineEmits<{ select: [id: string] }>()
 const { t, locale } = useI18n()
-const route = useRoute()
-const router = useRouter()
 
 const data = ref<ServicesView>()
 const nodes = ref(new Map<string, TopoNode>())
 const loading = ref(true)
 const query = ref('')
 
-const tab = computed(() => (route.query.tab === 'dns' ? 'dns' : 'dhcp'))
+const tab = ref<'dhcp' | 'dns'>('dhcp')
 function go(t: 'dhcp' | 'dns') {
-  void router.replace({ query: { ...route.query, tab: t } })
+  tab.value = t
 }
 
 async function load() {
@@ -49,8 +47,9 @@ const name = (id?: string) => {
   const n = id ? nodes.value.get(id) : undefined
   return n ? displayName(n, t) : ''
 }
+/** A device's name opens it on the map. */
 function open(id?: string) {
-  if (id) void router.push({ name: 'map', query: { node: id } })
+  if (id) emit('select', id)
 }
 
 // DHCP: one line per interface checked, and every server that answered.
@@ -127,10 +126,9 @@ function errorText(e?: string) {
 </script>
 
 <template>
-  <div class="page">
+  <div class="services">
     <header class="page-header">
       <div>
-        <h1>{{ t('services.title') }}</h1>
         <p class="muted">{{ t('services.subtitle') }}</p>
       </div>
       <p v-if="data?.generated_at" class="muted small">

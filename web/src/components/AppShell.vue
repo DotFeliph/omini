@@ -3,8 +3,6 @@ import {
   ArrowLeftRight,
   Bell,
   Cable,
-  Globe,
-  Layers,
   Network,
   PanelLeftClose,
   PanelLeftOpen,
@@ -27,8 +25,6 @@ const allItems = [
   { to: '/', icon: Network, label: 'nav.map' },
   { to: '/alerts', icon: Bell, label: 'nav.alerts' },
   { to: '/flows', icon: ArrowLeftRight, label: 'nav.flows', when: () => features.flows },
-  { to: '/dns-dhcp', icon: Globe, label: 'nav.services' },
-  { to: '/vlans', icon: Layers, label: 'nav.vlans' },
   { to: '/integrations', icon: Cable, label: 'nav.integrations' },
   { to: '/settings', icon: Settings, label: 'nav.settings' },
 ]
